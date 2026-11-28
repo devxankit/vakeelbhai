@@ -6,6 +6,6 @@ Vakeel Bhai: a legal-services platform connecting clients with verified advocate
 |---|---|
 | `mobile-app/` | React Native app (client + advocate), see its README |
 | `frontend/` | Website, client and advocate portals, admin panel (Vite + React) |
-| `backend/` | API (Node + Express + MongoDB), later phase |
+| `backend/` | API (Node + Express + MongoDB), in progress, see its README |
 | `docs/` | Scope of work, project plan, design assets |
 | `assets/` | Brand and illustration source files |

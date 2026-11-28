@@ -1,6 +1,5 @@
 import { Alert, Linking } from 'react-native';
 import { launchCamera, launchImageLibrary, ImagePickerResponse } from 'react-native-image-picker';
-import { SUPPORT_WHATSAPP } from '../data/catalog';
 import { tr } from '../i18n';
 
 const OPTS = { mediaType: 'photo' as const, quality: 0.7 as const, maxWidth: 1600, maxHeight: 1600, saveToPhotos: false };
@@ -23,11 +22,12 @@ export async function choosePhoto() {
   return pick(await launchImageLibrary({ ...OPTS, selectionLimit: 1 }));
 }
 
-/** WhatsApp support with a prefilled topic. The number comes from the admin panel later. */
-export function openWhatsApp(topic: string) {
+/** WhatsApp support with a prefilled topic. The number is set by the admin (meta.supportWhatsApp). */
+export function openWhatsApp(topic: string, number?: string) {
   const text = encodeURIComponent('Hi Vakeel Bhai, I need help with: ' + topic);
-  const url = SUPPORT_WHATSAPP ? 'https://wa.me/' + SUPPORT_WHATSAPP + '?text=' + text : 'whatsapp://send?text=' + text;
-  Linking.openURL(url).catch(() =>
-    Alert.alert(tr('WhatsApp support'), tr('The support number will be added before launch. WhatsApp could not be opened on this phone.')),
-  );
+  if (!number) {
+    Alert.alert(tr('WhatsApp support'), tr('Our WhatsApp number is not set up yet. Please use the help desk in the app.'));
+    return;
+  }
+  Linking.openURL('https://wa.me/' + number + '?text=' + text).catch(() => Alert.alert(tr('WhatsApp support'), tr('WhatsApp could not be opened on this phone.')));
 }

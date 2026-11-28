@@ -1,0 +1,41 @@
+{
+  "name": "vakeelbhai-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Vakeel Bhai API: one backend for the mobile app, website portals and admin panel",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=22.11.0"
+  },
+  "scripts": {
+    "dev": "node --watch --env-file-if-exists=.env src/server.js",
+    "start": "node --env-file-if-exists=.env src/server.js",
+    "test": "node --test --test-concurrency=1 \"tests/**/*.test.js\"",
+    "admin:create": "node --env-file-if-exists=.env scripts/create-admin.js",
+    "seed:categories": "node --env-file-if-exists=.env scripts/seed-categories.js",
+    "dev:db": "node scripts/dev-db.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.5",
+    "file-type": "^22.3.0",
+    "helmet": "^8.3.0",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^8.24.11",
+    "multer": "^2.5.0",
+    "pdfkit": "^0.17.2",
+    "pino": "^10.4.0",
+    "pino-http": "^11.0.0",
+    "socket.io": "^4.8.4",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "mongodb-memory-server": "^11.4.0",
+    "socket.io-client": "^4.8.4",
+    "supertest": "^7.3.2"
+  }
+}

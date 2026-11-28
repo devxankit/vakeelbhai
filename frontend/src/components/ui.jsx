@@ -61,6 +61,7 @@ export const REQ_STATUS = {
   done: { label: 'Confirm completion', tone: 'orange' },
   completed: { label: 'Completed', tone: 'green' },
   disputed: { label: 'Disputed', tone: 'red' },
+  refunded: { label: 'Refunded', tone: 'neutral' },
 }
 export const CASE_STATUS = {
   assigned: { label: 'New request', tone: 'gold' },
@@ -70,6 +71,7 @@ export const CASE_STATUS = {
   done: { label: 'Awaiting confirmation', tone: 'orange' },
   completed: { label: 'Completed', tone: 'green' },
   disputed: { label: 'Disputed', tone: 'red' },
+  refunded: { label: 'Refunded', tone: 'neutral' },
 }
 export const ADMIN_REQ_STATUS = {
   submitted: { label: 'Unassigned', tone: 'neutral' },
@@ -80,6 +82,8 @@ export const ADMIN_REQ_STATUS = {
   done: { label: 'Awaiting confirmation', tone: 'orange' },
   completed: { label: 'Completed', tone: 'green' },
   disputed: { label: 'Disputed', tone: 'red' },
+  refunded: { label: 'Refunded to client', tone: 'neutral' },
+  cancelled: { label: 'Cancelled', tone: 'neutral' },
 }
 export const ADV_STATUS = {
   none: { label: 'Registering', tone: 'neutral' },

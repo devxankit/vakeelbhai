@@ -1,16 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Image, Pressable, TextInput, View, useWindowDimensions } from 'react-native';
+import { Alert, Animated, Image, Pressable, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ArrowLeft, ArrowRight, Globe, Lock, ShieldCheck } from 'lucide-react-native';
 import T from '../components/T';
 import { Body, BottomBar, Button, Field, IconBtn, InkHeader, Radio, Tap, useBarStyle } from '../components/ui';
 import { Emblem, IMG, Wordmark } from '../components/brand';
 import { GlowArt } from '../components/art';
+import ServerSwitch from '../components/ServerSwitch';
 import { colors, font } from '../theme';
 import { useApp, Role } from '../store/AppStore';
 import { startRoute } from '../navigation/routes';
 import { LANGS, LangCode, tr, useLang } from '../i18n';
 import { phonePretty } from '../utils/format';
+import { errText, sendOtp } from '../api/client';
 
 type P = { navigation: any; route: any };
 
@@ -21,7 +23,7 @@ export function resetTo(nav: any, r: { name: string; params?: object }) {
 /* ---------- Splash ---------- */
 
 export function Splash({ navigation }: P) {
-  const { s, ready } = useApp();
+  const { prefs, me, ready } = useApp();
   useBarStyle(true);
   const progress = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -29,9 +31,9 @@ export function Splash({ navigation }: P) {
   }, [progress]);
   useEffect(() => {
     if (!ready) return;
-    const t = setTimeout(() => resetTo(navigation, startRoute(s)), 1200);
+    const t = setTimeout(() => resetTo(navigation, startRoute({ prefs, me })), 900);
     return () => clearTimeout(t);
-    // Route once, with the state loaded from the device.
+    // Route once, with the preferences from the device and the profile from the server.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
   return (
@@ -64,10 +66,10 @@ export function Splash({ navigation }: P) {
 /* ---------- Language ---------- */
 
 export function Language({ navigation, route }: P) {
-  const { s, chooseLang } = useApp();
+  const { prefs, chooseLang } = useApp();
   useLang();
   const changing = route.params?.change;
-  const [pick, setPick] = useState<LangCode>(s.lang);
+  const [pick, setPick] = useState<LangCode>(prefs.lang);
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <InkHeader style={{ paddingBottom: 18 }}>
@@ -192,9 +194,9 @@ export function Intro({ navigation }: P) {
 /* ---------- Role ---------- */
 
 export function RoleSelect({ navigation }: P) {
-  const { s, chooseRole } = useApp();
+  const { prefs, chooseRole } = useApp();
   useLang();
-  const [role, setRole] = useState<Role>(s.role ?? 'client');
+  const [role, setRole] = useState<Role>(prefs.role ?? 'client');
   const card = (r: Role, img: any, title: string, sub: string) => {
     const on = role === r;
     return (
@@ -229,13 +231,15 @@ export function RoleSelect({ navigation }: P) {
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <InkHeader style={{ paddingBottom: 20 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 40 }}>
-          <Wordmark height={30} />
+          <ServerSwitch>
+            <Wordmark height={30} />
+          </ServerSwitch>
           <Tap
             onPress={() => navigation.navigate('Language', { change: true })}
             style={{ height: 34, borderRadius: 999, borderWidth: 1, borderColor: colors.inkBorder, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <Globe size={15} color="#E9E5DC" />
             <T w="semibold" size={12} color="#E9E5DC" raw>
-              {LANGS.find(l => l.code === s.lang)?.native}
+              {LANGS.find(l => l.code === prefs.lang)?.native}
             </T>
           </Tap>
         </View>
@@ -283,10 +287,23 @@ export function RoleSelect({ navigation }: P) {
 const validPhone = (p: string) => /^[6-9]\d{9}$/.test(p.replace(/\D/g, ''));
 
 export function Login({ navigation }: P) {
-  const { s } = useApp();
+  const { prefs } = useApp();
   const [phone, setPhone] = useState('');
+  const [busy, setBusy] = useState(false);
   const ok = validPhone(phone);
-  const isClient = s.role !== 'advocate';
+  const isClient = prefs.role !== 'advocate';
+  const send = async () => {
+    const p = phone.replace(/\D/g, '');
+    setBusy(true);
+    try {
+      await sendOtp(p, prefs.role ?? 'client');
+      navigation.navigate('Otp', { phone: p });
+    } catch (e) {
+      Alert.alert(tr('Could not send the code'), errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <InkHeader style={{ paddingLeft: 8, paddingBottom: 20 }}>
@@ -300,9 +317,11 @@ export function Login({ navigation }: P) {
           </View>
         </View>
         <View style={{ paddingLeft: 12 }}>
+          <ServerSwitch>
           <T w="serif" size={24} color={colors.white} style={{ marginTop: 8 }}>
             Log in
           </T>
+          </ServerSwitch>
           <T size={14} color={colors.onInkMuted} lh={21} style={{ marginTop: 6 }}>
             Use your mobile number. New here? The same step creates your account.
           </T>
@@ -323,7 +342,7 @@ export function Login({ navigation }: P) {
         />
       </Body>
       <BottomBar>
-        <Button title="Get OTP" disabled={!ok} onPress={() => navigation.navigate('Otp', { phone: phone.replace(/\D/g, '') })} />
+        <Button title="Get OTP" disabled={!ok} loading={busy} onPress={send} />
         <T size={12} color={colors.muted} center lh={18}>
           By continuing you agree to our Terms and Privacy Policy
         </T>
@@ -335,11 +354,13 @@ export function Login({ navigation }: P) {
 /* ---------- OTP ---------- */
 
 export function Otp({ navigation, route }: P) {
-  const { s, login } = useApp();
+  const { prefs, login } = useApp();
   useLang();
   const phone: string = route.params?.phone ?? '';
   const [code, setCode] = useState('');
   const [left, setLeft] = useState(30);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
   const input = useRef<React.ComponentRef<typeof TextInput>>(null);
 
   useEffect(() => {
@@ -347,11 +368,28 @@ export function Otp({ navigation, route }: P) {
     return () => clearInterval(t);
   }, []);
 
-  const verify = (c = code) => {
-    if (c.length !== 6) return;
-    login(phone);
-    const next = { ...s, phone, loggedIn: true };
-    resetTo(navigation, startRoute(next));
+  const verify = async (c = code) => {
+    if (c.length !== 6 || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      await login(phone, c);
+      // The store now holds the profile; Splash sends the user to the right first screen.
+      resetTo(navigation, { name: 'Splash' });
+    } catch (e) {
+      setError(errText(e));
+      setCode('');
+      setBusy(false);
+    }
+  };
+  const resend = async () => {
+    try {
+      await sendOtp(phone, prefs.role ?? 'client');
+      setLeft(30);
+      setError('');
+    } catch (e) {
+      setError(errText(e));
+    }
   };
 
   return (
@@ -363,7 +401,7 @@ export function Otp({ navigation, route }: P) {
             Enter the code
           </T>
           <T size={14} color={colors.onInkMuted} style={{ marginTop: 6 }}>
-            {tr('Logging in as {role}', { role: tr(s.role === 'advocate' ? 'Advocate' : 'Client') })}
+            {tr('Logging in as {role}', { role: tr(prefs.role === 'advocate' ? 'Advocate' : 'Client') })}
           </T>
         </View>
       </InkHeader>
@@ -424,15 +462,15 @@ export function Otp({ navigation, route }: P) {
           style={{ position: 'absolute', opacity: 0, height: 1, width: 1, fontFamily: font.regular }}
         />
         <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-          <T size={13} w="medium" color={colors.muted}>
-            Demo build: any 6-digit code works
+          <T size={13} w="medium" color={error ? colors.red : colors.muted} style={{ flex: 1 }} raw>
+            {error || tr('Valid for 5 minutes')}
           </T>
           {left > 0 ? (
             <T size={13} w="medium" color={colors.muted} raw>
               {tr('Resend in') + ' 0:' + String(left).padStart(2, '0')}
             </T>
           ) : (
-            <Tap onPress={() => setLeft(30)} hitSlop={10}>
+            <Tap onPress={resend} hitSlop={10}>
               <T size={13} w="semibold" color={colors.goldText}>
                 Resend code
               </T>
@@ -441,7 +479,7 @@ export function Otp({ navigation, route }: P) {
         </View>
       </Body>
       <BottomBar>
-        <Button title="Verify and continue" disabled={code.length !== 6} onPress={() => verify()} />
+        <Button title="Verify and continue" disabled={code.length !== 6} loading={busy} onPress={() => verify()} />
       </BottomBar>
     </View>
   );

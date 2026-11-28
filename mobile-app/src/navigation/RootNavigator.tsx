@@ -4,7 +4,7 @@ import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { BottomTabBarProps, createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Briefcase, FileText, House, LayoutDashboard, LucideIcon, User, Wallet } from 'lucide-react-native';
+import { Briefcase, Compass, FileText, House, LayoutDashboard, LucideIcon, User, Wallet } from 'lucide-react-native';
 import T from '../components/T';
 import { Tap } from '../components/ui';
 import { colors } from '../theme';
@@ -22,6 +22,7 @@ const theme = { ...DefaultTheme, colors: { ...DefaultTheme.colors, background: c
 
 const ICONS: Record<string, LucideIcon> = {
   Home: House,
+  Explore: Compass,
   Requests: FileText,
   Wallet: Wallet,
   Profile: User,
@@ -32,6 +33,7 @@ const ICONS: Record<string, LucideIcon> = {
 };
 const LABELS: Record<string, string> = {
   Home: 'Home',
+  Explore: 'Explore',
   Requests: 'Requests',
   Wallet: 'Wallet',
   Profile: 'Profile',
@@ -87,6 +89,7 @@ function ClientTabs() {
   return (
     <Tabs.Navigator screenOptions={{ headerShown: false }} tabBar={renderTabBar}>
       <Tabs.Screen name="Home" component={C.ClientHome} />
+      <Tabs.Screen name="Explore" component={C.Explore} />
       <Tabs.Screen name="Requests" component={C.Requests} />
       <Tabs.Screen name="Wallet" component={C.ClientWallet} />
       <Tabs.Screen name="Profile" component={C.ClientProfile} />
@@ -136,6 +139,8 @@ export default function RootNavigator() {
         <Stack.Screen name="Challan" component={X.Challan} />
         <Stack.Screen name="ChallanReceipt" component={X.ChallanReceipt} />
         <Stack.Screen name="GstFiling" component={X.GstFiling} />
+        <Stack.Screen name="GstDetail" component={X.GstDetail} />
+        <Stack.Screen name="Invoices" component={S.Invoices} />
 
         <Stack.Screen name="AdvDetails" component={V.AdvDetails} />
         <Stack.Screen name="AdvPractice" component={V.AdvPractice} />
@@ -155,6 +160,8 @@ export default function RootNavigator() {
         <Stack.Screen name="Notifications" component={S.Notifications} />
         <Stack.Screen name="Settings" component={S.Settings} />
         <Stack.Screen name="Help" component={S.Help} />
+        <Stack.Screen name="NewTicket" component={S.NewTicket} />
+        <Stack.Screen name="Ticket" component={S.Ticket} />
         <Stack.Screen name="Legal" component={S.Legal} />
       </Stack.Navigator>
     </NavigationContainer>

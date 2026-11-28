@@ -41,7 +41,7 @@ function Header() {
               हिं
             </button>
           </div>
-          <Link to="/app" className="hidden sm:inline-flex h-10 items-center px-4 rounded-[10px] border border-line-strong text-[14px] font-semibold hover:bg-page">
+          <Link to="/login" className="hidden sm:inline-flex h-10 items-center px-4 rounded-[10px] border border-line-strong text-[14px] font-semibold hover:bg-page">
             {t('Log in')}
           </Link>
           <Link to="/app/new" className="hidden sm:inline-flex h-10 items-center px-4 rounded-[10px] bg-gold text-ink text-[14px] font-bold hover:bg-gold-dark">
@@ -61,7 +61,7 @@ function Header() {
               </NavLink>
             ))}
             <div className="flex gap-2 pt-3">
-              <Link to="/app" className="flex-1 h-11 grid place-items-center rounded-xl border border-line-strong font-semibold">
+              <Link to="/login" className="flex-1 h-11 grid place-items-center rounded-xl border border-line-strong font-semibold">
                 {t('Log in')}
               </Link>
               <Link to="/app/new" className="flex-1 h-11 grid place-items-center rounded-xl bg-gold font-bold">
@@ -106,7 +106,7 @@ function Footer() {
       <div className="border-t border-ink-line">
         <div className="wrap py-4 flex flex-wrap justify-between gap-2 text-[12px] text-on-ink-muted">
           <span>© {new Date().getFullYear()} Vakeel Bhai</span>
-          <span>{t('Demo website: sample data only.')}</span>
+          <span>{t('Advocates on Vakeel Bhai are independent, Bar Council-verified professionals.')}</span>
         </div>
       </div>
     </footer>
@@ -115,7 +115,7 @@ function Footer() {
 
 function ScrollTop() {
   const { pathname } = useLocation()
-  useEffect(() => window.scrollTo(0, 0), [pathname])
+  useEffect(() => { window.scrollTo(0, 0) }, [pathname])
   return null
 }
 

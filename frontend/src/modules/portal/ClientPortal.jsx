@@ -1,45 +1,122 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { Car, ChevronRight, CircleCheck, Copy, FileText, Gift, House, Plus, Receipt, ShieldCheck, Star, Tag, User, Wallet, X } from 'lucide-react'
-import { Avatar, BillRow, Button, Card, CategoryTag, CheckBox, Chip, EmptyState, Field, Modal, Note, Pill, REQ_STATUS, SectionTitle, Select, Timeline, Toggle, cx, useToast } from '@/components/ui'
-import { CATEGORIES, categoryOf, CHALLANS, DISPUTE_REASONS, DISTRICTS, GST_RETURNS, IMG, REQ_LANGS, STATES } from '@/lib/catalog'
-import { act, advById, fileToDataUrl, ratesFor, useStore } from '@/lib/store'
-import { clientBill, inr, offerDiscount } from '@/lib/money'
+import { Car, ChevronRight, Compass, FileText, Gift, Headset, House, MessageCircle, Plus, Receipt, ShieldCheck, Star, User, Wallet, X } from 'lucide-react'
+import { Button, Card, Chip, EmptyState, Field, Note, PageLoader, Pill, REQ_STATUS, SectionTitle, Select, Timeline, Toggle, cx, useToast } from '@/components/ui'
+import SecureImage from '@/components/SecureImage'
+import { categoryOf, DISPUTE_REASONS, DISTRICTS, IMG, REQ_LANGS, STATES } from '@/lib/catalog'
+import { errText, publicApi, refreshUser, uploadForm, userApi, userFileUrl, userSession } from '@/lib/api'
+import { closeLive, useLive } from '@/lib/live'
+import { useGatewayPay } from '@/lib/pay'
+import { inr } from '@/lib/money'
 import { ago, dateShort, phonePretty, useTitle } from '@/lib/format'
-import { ChatPanel, PageHead, PortalLogin, PortalShell, TrustNote } from './common'
+import { BillRow } from '@/components/ui'
+import { PageHead, PortalShell, TrustNote } from './common'
+import LiveChat from './LiveChat'
+import { Challan, ChallanOrder, Explore, HelpDesk, NewTicket, Ticket } from './services'
+import { GstFilingPage, GstFilingDetailPage, Invoices, OffersPage, ReferPage, openInvoice, useBanners } from './growth'
+
+/**
+ * Client area of the website. SAME FLOW AS THE APP (mobile-app/src/screens/client.tsx).
+ * On the real API: login, profile, categories, new request → submitted → my requests →
+ * request detail → chat. Still sample data until their phases: payment, e-Challan, GST
+ * filing, wallet, refer and offers: all on the API.
+ */
 
 const NAV = [
   { to: '/app', end: true, label: 'Home', icon: House, mobile: true },
+  { to: '/app/explore', label: 'Explore', icon: Compass, mobile: true },
   { to: '/app/requests', label: 'My requests', short: 'Requests', icon: FileText, mobile: true },
   { to: '/app/challan', label: 'e-Challan', icon: Car },
   { to: '/app/gst', label: 'GST filing', icon: Receipt },
   { to: '/app/wallet', label: 'Wallet', icon: Wallet, mobile: true },
   { to: '/app/refer', label: 'Refer and earn', icon: Gift },
+  { to: '/app/help', label: 'Help desk', icon: Headset },
   { to: '/app/profile', label: 'Profile', icon: User, mobile: true },
 ]
 
+/** Catalog look (image, colours) + the admin's live name/description for a category. */
+const catOf = (meta, key) => ({ ...categoryOf(key), ...meta?.categories.find((c) => c.key === key) })
+
 export default function ClientPortal() {
-  const { s, update } = useStore()
   const loc = useLocation()
-  const me = s.clients.find((c) => c.id === s.session.client)
+  const [acct, setAcct] = useState(undefined) // undefined: checking · null: signed out
+  const [meta, setMeta] = useState(null)
   useTitle('My account')
-  if (!me) return <PortalLogin role="client" />
-  if (me.blocked) return <Blocked onLogout={() => update((x) => act.logout(x, 'client'))} />
-  if (!me.name) return <Setup me={me} />
+
+  const load = useCallback(async () => {
+    try {
+      const [p, m] = await Promise.all([userApi('/client/profile'), publicApi('/meta')])
+      setMeta(m.data)
+      setAcct(p.data)
+    } catch (e) {
+      if (e.code === 'ACCOUNT_BLOCKED') setAcct({ blocked: true })
+      else if (e.status === 401 || e.status === 403) setAcct(null)
+      else setAcct({ error: errText(e) })
+    }
+  }, [])
+
+  useEffect(() => {
+    userSession.onSignedOut(() => setAcct(null))
+    refreshUser()
+      .then((d) => (d.user?.role === 'client' ? load() : setAcct(null)))
+      .catch((e) => setAcct(e.code === 'ACCOUNT_BLOCKED' ? { blocked: true } : null))
+  }, [load])
+
+
+  const logout = async () => {
+    try {
+      await userApi('/auth/logout', { method: 'POST' })
+    } catch {
+      /* already gone */
+    }
+    userSession.clear()
+    closeLive('user')
+    setAcct(null)
+  }
+
+  if (acct === null) return <Navigate to={'/login?role=client&next=' + encodeURIComponent(loc.pathname + loc.search)} replace />
+  if (acct?.blocked) return <Blocked onLogout={logout} />
+  if (acct?.error)
+    return (
+      <div className="min-h-screen grid place-items-center p-6">
+        <Card className="p-6 max-w-sm flex flex-col gap-3">
+          <p className="font-bold">Could not load your account</p>
+          <p className="text-[14px] text-muted">{acct.error}</p>
+          <Button variant="line" onClick={load}>
+            Try again
+          </Button>
+        </Card>
+      </div>
+    )
+  if (acct === undefined || !meta) return <PageLoader />
+  const me = { id: acct.user.id, name: acct.user.name, email: acct.user.email, city: acct.city, state: acct.state, phone: acct.user.phone }
+  if (!acct.complete) return <Setup acct={acct} onSaved={setAcct} />
   const title = NAV.find((n) => (n.end ? loc.pathname === n.to : loc.pathname.startsWith(n.to)))?.label ?? 'My account'
   return (
-    <PortalShell nav={NAV} user={me} userId={me.id} title={title} roleLabel="Client" onLogout={() => update((x) => act.logout(x, 'client'))}>
+    <PortalShell nav={NAV} user={me} userId={me.id} title={title} roleLabel="Client" onLogout={logout}>
       <Routes>
-        <Route index element={<Home me={me} />} />
-        <Route path="new" element={<NewRequest me={me} />} />
-        <Route path="requests" element={<Requests me={me} />} />
-        <Route path="requests/:id" element={<RequestDetail me={me} />} />
-        <Route path="challan" element={<Challan me={me} />} />
-        <Route path="gst" element={<Gst me={me} />} />
-        <Route path="wallet" element={<ClientWallet me={me} />} />
-        <Route path="refer" element={<Refer me={me} />} />
-        <Route path="offers" element={<Offers me={me} />} />
-        <Route path="profile" element={<Profile me={me} />} />
+        <Route index element={<Home me={me} meta={meta} />} />
+        <Route path="new" element={<NewRequest me={me} meta={meta} />} />
+        <Route path="submitted/:id" element={<RequestSubmitted />} />
+        <Route path="requests" element={<Requests meta={meta} />} />
+        <Route path="requests/:id" element={<RequestDetail meta={meta} />} />
+        <Route path="requests/:id/checkout" element={<Checkout meta={meta} />} />
+        <Route path="requests/:id/paid" element={<PaymentDone />} />
+        <Route path="requests/:id/confirm" element={<ConfirmPage />} />
+        <Route path="requests/:id/dispute" element={<DisputePage />} />
+        <Route path="explore" element={<Explore meta={meta} />} />
+        <Route path="challan" element={<Challan meta={meta} />} />
+        <Route path="challan/orders/:id" element={<ChallanOrder />} />
+        <Route path="help" element={<HelpDesk base="/app/help" wa={meta.supportWhatsApp} />} />
+        <Route path="help/new" element={<NewTicket base="/app/help" role="client" />} />
+        <Route path="help/:id" element={<Ticket base="/app/help" />} />
+        <Route path="gst" element={<GstFilingPage meta={meta} />} />
+        <Route path="gst/:id" element={<GstFilingDetailPage />} />
+        <Route path="invoices" element={<Invoices />} />
+        <Route path="wallet" element={<ClientWallet />} />
+        <Route path="refer" element={<ReferPage />} />
+        <Route path="offers" element={<OffersPage />} />
+        <Route path="profile" element={<Profile me={me} onSaved={setAcct} onLogout={logout} />} />
         <Route path="*" element={<Navigate to="/app" replace />} />
       </Routes>
     </PortalShell>
@@ -60,9 +137,23 @@ function Blocked({ onLogout }) {
   )
 }
 
-function Setup({ me }) {
-  const { update } = useStore()
-  const [f, setF] = useState({ name: '', email: '', city: 'Indore', state: 'Madhya Pradesh', referredBy: '' })
+/** The app's ClientSetup: name, email, city/state (referral code arrives with Refer and earn). */
+function Setup({ acct, onSaved }) {
+  const [f, setF] = useState({ name: acct.user.name || '', email: acct.user.email || '', city: acct.city || 'Indore', state: acct.state || 'Madhya Pradesh' })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const save = async (e) => {
+    e.preventDefault()
+    setBusy(true)
+    setError('')
+    try {
+      onSaved((await userApi('/client/profile', { method: 'PATCH', body: { ...f, name: f.name.trim(), email: f.email.trim() } })).data)
+    } catch (err) {
+      setError(errText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
   return (
     <div className="min-h-screen bg-page">
       <div className="bg-ink px-5 py-10">
@@ -71,20 +162,15 @@ function Setup({ me }) {
           <p className="text-on-ink-muted mt-1">So the right advocate can help you. Takes 30 seconds.</p>
         </div>
       </div>
-      <form
-        className="max-w-lg mx-auto p-5 flex flex-col gap-4"
-        onSubmit={(e) => {
-          e.preventDefault()
-          update((s) => act.saveClient(s, me.id, f))
-        }}>
-        <Field label="Your name" autoFocus value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
-        <Field label="Email (for invoices)" type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
+      <form className="max-w-lg mx-auto p-5 flex flex-col gap-4" onSubmit={save}>
+        <Field label="Your name" autoFocus value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} maxLength={80} />
+        <Field label="Email (for invoices)" type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} maxLength={120} />
         <div className="grid grid-cols-2 gap-3">
           <Select label="City / district" value={f.city} onChange={(e) => setF({ ...f, city: e.target.value })} options={DISTRICTS} />
           <Select label="State" value={f.state} onChange={(e) => setF({ ...f, state: e.target.value })} options={STATES} />
         </div>
-        <Field label="Referral code (optional)" value={f.referredBy} onChange={(e) => setF({ ...f, referredBy: e.target.value.toUpperCase() })} />
-        <Button type="submit" size="lg" disabled={f.name.trim().length < 2}>
+        {error ? <Note tone="orange">{error}</Note> : null}
+        <Button type="submit" size="lg" loading={busy} disabled={f.name.trim().length < 2}>
           Continue
         </Button>
       </form>
@@ -92,34 +178,49 @@ function Setup({ me }) {
   )
 }
 
+/** My requests from the API, refreshed live. */
+function useMyRequests(tab) {
+  const [list, setList] = useState(null)
+  const [error, setError] = useState('')
+  const load = useCallback(async () => {
+    try {
+      setList((await userApi('/client/requests?tab=' + tab)).data)
+      setError('')
+    } catch (e) {
+      setError(errText(e))
+    }
+  }, [tab])
+  useEffect(() => {
+    load()
+  }, [load])
+  useLive('user', { 'request:update': load, reconnect: load })
+  return { list, error, reload: load }
+}
+
 /* ---------------- home ---------------- */
 
-function Home({ me }) {
-  const { s } = useStore()
+function Home({ me, meta }) {
   const nav = useNavigate()
-  const banners = s.settings.banners.filter((b) => b.active)
+  const { list } = useMyRequests('active')
+  const banners = useBanners()
   const [i, setI] = useState(0)
   useEffect(() => {
     const t = setInterval(() => setI((x) => (x + 1) % Math.max(1, banners.length)), 5000)
     return () => clearInterval(t)
   }, [banners.length])
   const b = banners[i % Math.max(1, banners.length)]
-  const active = s.requests.filter((r) => r.clientId === me.id && r.status !== 'completed')
-  const paid = me.paidChallans.map((p) => p.id)
-  const pending = CHALLANS.filter((c) => me.vehicles.some((v) => v.number === c.vehicle) && !paid.includes(c.id)).length
-  const cats = CATEGORIES.filter((c) => s.settings.categories.find((x) => x.key === c.key)?.active !== false)
   return (
     <div className="flex flex-col gap-7">
       <div>
         <p className="text-[22px] font-bold">Namaste, {me.name.split(' ')[0]}</p>
-        <p className="text-muted text-[14px]">{me.city}, {me.state}</p>
+        <p className="text-muted text-[14px]">{[me.city, me.state].filter(Boolean).join(', ')}</p>
       </div>
       {b ? (
-        <button onClick={() => nav(b.image === 'bannerTraffic' ? '/app/challan' : b.image === 'bannerGavel' ? '/app/offers' : '/app/new')} className="relative h-[190px] rounded-2xl overflow-hidden bg-ink text-left">
-          <img src={IMG[b.image]} alt="" className="absolute right-0 top-0 h-full w-[60%] object-cover" />
+        <button onClick={() => b.to && nav(b.to)} className="relative h-[190px] rounded-2xl overflow-hidden bg-ink text-left">
+          {b.img ? <img src={b.img} alt="" className="absolute right-0 top-0 h-full w-[60%] object-cover" /> : null}
           <div className="absolute inset-0 bg-gradient-to-r from-ink from-45% via-ink/70 via-60% to-transparent" />
           <div className="relative p-6 flex flex-col gap-2.5 max-w-[60%]">
-            <span className="self-start rounded-md bg-gold px-2 py-0.5 text-[11px] font-bold text-ink">{b.tag}</span>
+            <span className="self-start rounded-md bg-gold px-2 py-0.5 text-[11px] font-bold text-ink">{b.tag || 'Vakeel Bhai'}</span>
             <p className="font-serif font-bold text-[24px] leading-tight text-white">{b.title}</p>
             <p className="text-[13px] text-on-ink">{b.sub}</p>
           </div>
@@ -134,12 +235,15 @@ function Home({ me }) {
       <section className="flex flex-col gap-3.5">
         <SectionTitle title="Legal services" />
         <div className="grid grid-cols-4 sm:grid-cols-8 gap-x-2.5 gap-y-4">
-          {cats.map((c) => (
-            <Link key={c.key} to={'/app/new?category=' + c.key} className="flex flex-col gap-1.5 text-center">
-              <img src={c.image} alt="" className="aspect-square w-full rounded-[14px] object-cover" />
-              <span className="text-[12px] font-semibold leading-tight">{c.short}</span>
-            </Link>
-          ))}
+          {meta.categories.map((mc) => {
+            const c = catOf(meta, mc.key)
+            return (
+              <Link key={c.key} to={'/app/new?category=' + c.key} className="flex flex-col gap-1.5 text-center">
+                <img src={c.image} alt="" className="aspect-square w-full rounded-[14px] object-cover" />
+                <span className="text-[12px] font-semibold leading-tight">{c.short}</span>
+              </Link>
+            )
+          })}
           <Link to="/app/challan" className="flex flex-col gap-1.5 text-center">
             <span className="relative">
               <img src={IMG.catChallan} alt="" className="aspect-square w-full rounded-[14px] object-cover" />
@@ -150,11 +254,11 @@ function Home({ me }) {
         </div>
       </section>
 
-      {active.length ? (
+      {list?.length ? (
         <section className="flex flex-col gap-3">
           <SectionTitle title="Your active requests" action="See all" onAction={() => nav('/app/requests')} />
-          {active.slice(0, 3).map((r) => (
-            <RequestRow key={r.id} r={r} />
+          {list.slice(0, 3).map((r) => (
+            <RequestRow key={r.id} r={r} meta={meta} />
           ))}
         </section>
       ) : null}
@@ -164,7 +268,7 @@ function Home({ me }) {
           <img src={IMG.bannerTraffic} alt="" className="absolute right-0 top-0 h-full w-[55%] object-cover opacity-70" />
           <div className="absolute inset-0 bg-gradient-to-r from-ink from-45% to-transparent" />
           <span className="relative font-bold text-[16px]">Check and pay e-Challan</span>
-          <span className="relative text-[12px] text-on-ink">{pending ? pending + ' pending on your vehicles' : 'No pending challans'}</span>
+          <span className="relative text-[12px] text-on-ink">Add your vehicle. We pay the department for you.</span>
           <span className="relative text-[12px] font-bold text-gold">Pay now ›</span>
         </Link>
         <MiniCard to="/app/gst" icon={Receipt} title="GST filing" sub="Returns filed by our team, tracked here" />
@@ -187,46 +291,85 @@ function MiniCard({ to, icon: Icon, title, sub }) {
   )
 }
 
-function RequestRow({ r }) {
-  const { s } = useStore()
-  const c = categoryOf(r.category)
-  const a = advById(s, r.advocateId)
+/** The app's request card: category, number, time, status, issue, and the advocate once accepted. */
+function RequestRow({ r, meta }) {
+  const c = catOf(meta, r.category)
   const st = REQ_STATUS[r.status]
-  const advVisible = a && !['submitted', 'assigned'].includes(r.status)
   return (
-    <Link to={'/app/requests/' + r.id} className="card p-4 flex items-center gap-3.5 hover:border-line-strong">
-      <img src={c.image} alt="" className="size-12 rounded-[10px] object-cover" />
-      <div className="flex-1 min-w-0">
-        <p className="font-bold text-[14.5px]">{c.name}</p>
-        <p className="text-[12.5px] text-muted truncate">
-          {r.id} · {advVisible ? 'Adv. ' + a.name : 'Finding your advocate'} · {ago(r.createdAt)}
-        </p>
-      </div>
-      <Pill tone={st.tone}>{st.label}</Pill>
-      <ChevronRight className="size-4 text-muted hidden sm:block" />
+    <Link to={'/app/requests/' + r.id} className="card p-4 flex flex-col gap-2.5 hover:border-line-strong">
+      <span className="flex items-center gap-3">
+        <img src={c.image} alt="" className="size-[46px] rounded-[10px] object-cover" />
+        <span className="flex-1 min-w-0">
+          <span className="block font-bold text-[14.5px]">{c.name}</span>
+          <span className="block text-[12px] font-medium text-muted">
+            {r.id} · {ago(new Date(r.createdAt).getTime())}
+          </span>
+        </span>
+        <Pill tone={st.tone}>{st.label}</Pill>
+        <ChevronRight className="size-4 text-muted hidden sm:block" />
+      </span>
+      <span className="text-[13px] text-text-2 line-clamp-2">{r.issue}</span>
+      {r.advocate ? (
+        <span className="flex items-center gap-2 text-[12.5px] font-semibold text-text-2">
+          {r.advocate.hasPhoto ? <SecureImage load={userFileUrl} path={'/client/requests/' + r.id + '/advocate/photo'} alt="" className="size-6 rounded-full object-cover" /> : null}
+          {r.advocate.name}
+        </span>
+      ) : null}
     </Link>
   )
 }
 
-/* ---------------- new request ---------------- */
+/* ---------------- new request (app: RequestNew) ---------------- */
 
-function NewRequest({ me }) {
-  const { update } = useStore()
+function NewRequest({ me, meta }) {
   const nav = useNavigate()
+  const toast = useToast()
   const [q] = useSearchParams()
-  const [cat, setCat] = useState(q.get('category') || 'other')
+  const first = meta.categories.some((c) => c.key === q.get('category')) ? q.get('category') : meta.categories.find((c) => c.key === 'other')?.key ?? meta.categories[0]?.key
+  const [cat, setCat] = useState(first)
+  const [pickCat, setPickCat] = useState(false)
   const [issue, setIssue] = useState('')
-  const [district, setDistrict] = useState(q.get('district') || me.city)
+  const [district, setDistrict] = useState(q.get('district') || me.city || 'Indore')
   const [lang, setLang] = useState('Hindi')
-  const [docs, setDocs] = useState([])
-  const c = categoryOf(cat)
+  const [docs, setDocs] = useState([]) // { file, url }
+  const [busy, setBusy] = useState(false)
+  const c = catOf(meta, cat)
   const ok = issue.trim().length >= 15
+  useEffect(() => () => docs.forEach((d) => URL.revokeObjectURL(d.url)), [docs])
+
+  const addDoc = (e) => {
+    const f = e.target.files?.[0]
+    e.target.value = ''
+    if (!f) return
+    if (!/^image\/(jpeg|png|webp)$/.test(f.type) || f.size > 5 * 1024 * 1024) return toast('Choose a JPG, PNG or WebP photo up to 5 MB', 'red')
+    if (docs.length >= 5) return toast('You can add up to 5 documents', 'red')
+    setDocs([...docs, { file: f, url: URL.createObjectURL(f) }])
+  }
+
+  const submit = async () => {
+    setBusy(true)
+    try {
+      const r = (await userApi('/client/requests', { method: 'POST', body: { category: cat, issue: issue.trim(), district, language: lang } })).data
+      for (const d of docs) {
+        try {
+          await userApi('/client/requests/' + r.id + '/attachments', { method: 'POST', body: uploadForm(d.file) })
+        } catch (e) {
+          toast('A document could not be uploaded: ' + errText(e), 'red')
+        }
+      }
+      nav('/app/submitted/' + r.id, { replace: true })
+    } catch (e) {
+      toast(errText(e), 'red')
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
       <div className="flex flex-col gap-5">
         <PageHead title="Request an advocate" back />
         <div className="flex items-center gap-4 rounded-2xl p-3" style={{ background: c.tone.bg }}>
-          <img src={c.image} alt="" className="size-16 rounded-xl object-cover" />
+          <img src={c.image} alt="" className="size-[52px] rounded-xl object-cover" />
           <div className="flex-1">
             <p className="font-bold text-[16px]" style={{ color: c.tone.fg }}>
               {c.name}
@@ -235,115 +378,201 @@ function NewRequest({ me }) {
               {c.covers}
             </p>
           </div>
+          <button onClick={() => setPickCat(!pickCat)} className="text-[13px] font-semibold px-2" style={{ color: c.tone.fg }}>
+            {pickCat ? 'Done' : 'Change'}
+          </button>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {CATEGORIES.map((k) => (
-            <Chip key={k.key} active={k.key === cat} onClick={() => setCat(k.key)}>
-              {k.short}
-            </Chip>
-          ))}
-        </div>
+        {pickCat ? (
+          <div className="flex flex-wrap gap-2">
+            {meta.categories.map((k) => (
+              <Chip key={k.key} active={k.key === cat} onClick={() => (setCat(k.key), setPickCat(false))}>
+                {k.short}
+              </Chip>
+            ))}
+          </div>
+        ) : null}
         <Field label="Tell us what happened" as="textarea" maxLength={1000} value={issue} onChange={(e) => setIssue(e.target.value)} placeholder="Describe your problem in your own words. Mention dates, places and what you want to achieve." hint={issue.length + ' / 1000'} />
-        <div className="grid grid-cols-2 gap-3">
-          <Select label="District" value={district} onChange={(e) => setDistrict(e.target.value)} options={DISTRICTS} />
-          <Select label="Preferred language" value={lang} onChange={(e) => setLang(e.target.value)} options={REQ_LANGS} />
+        <Select label="District" value={district} onChange={(e) => setDistrict(e.target.value)} options={DISTRICTS.includes(district) ? DISTRICTS : [district, ...DISTRICTS]} />
+        <div className="flex flex-col gap-2">
+          <span className="text-[13px] font-semibold text-text-2">Preferred language</span>
+          <div className="flex flex-wrap gap-2">
+            {REQ_LANGS.slice(0, 5).map((l) => (
+              <Chip key={l} active={lang === l} onClick={() => setLang(l)}>
+                {l}
+              </Chip>
+            ))}
+          </div>
         </div>
         <div className="flex flex-col gap-2">
           <span className="text-[13px] font-semibold text-text-2">Documents (optional)</span>
           <div className="flex flex-wrap gap-2.5">
             {docs.map((d, i) => (
-              <span key={i} className="relative">
-                <img src={d} alt="" className="size-20 rounded-xl object-cover" />
+              <span key={d.url} className="relative">
+                <img src={d.url} alt="" className="size-[76px] rounded-xl object-cover bg-surface-2" />
                 <button type="button" aria-label="Remove" onClick={() => setDocs(docs.filter((_, k) => k !== i))} className="absolute -top-1.5 -right-1.5 grid size-6 place-items-center rounded-full bg-ink text-white">
                   <X className="size-3.5" />
                 </button>
               </span>
             ))}
-            <label className="grid size-20 place-items-center rounded-xl border-[1.5px] border-dashed border-[#B8B0A0] cursor-pointer" aria-label="Add document">
-              <Plus className="size-6 text-muted" />
-              <input type="file" accept="image/*" className="sr-only" onChange={async (e) => { const f = e.target.files?.[0]; if (f) setDocs([...docs, await fileToDataUrl(f, 900)]); e.target.value = '' }} />
-            </label>
+            {docs.length < 5 ? (
+              <label className="grid size-[76px] place-items-center rounded-xl border-[1.5px] border-dashed border-[#B8B0A0] cursor-pointer" aria-label="Add document">
+                <Plus className="size-[22px] text-muted" />
+                <input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={addDoc} />
+              </label>
+            ) : null}
           </div>
         </div>
-        <Button
-          size="lg"
-          disabled={!ok}
-          onClick={() => {
-            let id
-            update((s) => {
-              const n = act.submitRequest(s, me.id, { category: cat, issue: issue.trim(), district, lang, docs })
-              id = n.requests[0].id
-              return n
-            })
-            nav('/app/requests/' + id)
-          }}>
+        <Button size="lg" disabled={!ok} loading={busy} onClick={submit}>
           Submit request
         </Button>
-        {!ok ? <p className="text-[12px] text-muted -mt-2">Write at least a sentence about your problem.</p> : null}
+        {!ok ? <p className="text-[12px] text-muted -mt-2 text-center">Write at least a sentence about your problem</p> : null}
       </div>
       <Card className="p-5 flex flex-col gap-3 h-fit">
-        <p className="font-bold">What happens next</p>
-        {['Our team reviews your request and assigns a verified advocate in your district.', 'The advocate chats with you here and sends a fee quote. Your number stays private.', 'You pay online. We release it to the advocate only after you confirm the work is done.'].map((t, i) => (
+        <p className="font-bold text-[14px]">What happens next</p>
+        {['Our team reviews your request and assigns a verified advocate in your district.', 'The advocate chats with you here and sends a fee quote. Your number stays private.', 'You pay in the app. We release it to the advocate only after you confirm the work is done.'].map((t, i) => (
           <div key={t} className="flex gap-3">
             <span className="grid size-6 place-items-center rounded-full bg-ink text-gold text-[12px] font-bold shrink-0">{i + 1}</span>
             <p className="text-[13px] text-text-2">{t}</p>
           </div>
         ))}
-        <Note tone="gold">Demo: the admin panel assigns requests (/admin). If nobody does, a sample advocate is assigned after about 15 seconds.</Note>
       </Card>
     </div>
   )
 }
 
-/* ---------------- requests ---------------- */
-
-function Requests({ me }) {
-  const { s } = useStore()
+/** The app's RequestSubmitted screen. */
+function RequestSubmitted() {
+  const { id } = useParams()
   const nav = useNavigate()
-  const [tab, setTab] = useState('active')
-  const mine = s.requests.filter((r) => r.clientId === me.id)
-  const list = mine.filter((r) => (tab === 'active' ? r.status !== 'completed' : r.status === 'completed'))
   return (
-    <div className="flex flex-col gap-4">
-      <PageHead title="My requests" right={<Button icon={Plus} size="sm" onClick={() => nav('/app/new')}>New request</Button>} />
-      <div className="flex gap-2">
-        <Chip active={tab === 'active'} onClick={() => setTab('active')}>Active</Chip>
-        <Chip active={tab === 'done'} onClick={() => setTab('done')}>Completed</Chip>
+    <div className="rounded-2xl bg-ink p-8 sm:p-12 flex flex-col gap-5 max-w-xl">
+      <span className="grid size-[72px] place-items-center rounded-full bg-gold">
+        <FileText className="size-[34px] text-ink" />
+      </span>
+      <h1 className="font-serif font-bold text-[28px] text-white">Request submitted</h1>
+      <p className="text-[15px] leading-relaxed text-on-ink">Request {id} is with our team. We will assign a verified advocate and notify you. You can chat with them here.</p>
+      <div className="flex flex-col gap-2.5 mt-2">
+        <Button size="lg" onClick={() => nav('/app/requests/' + id, { replace: true })}>
+          Track my request
+        </Button>
+        <Button size="lg" variant="line" onClick={() => nav('/app', { replace: true })}>
+          Back to home
+        </Button>
       </div>
-      {list.length ? list.map((r) => <RequestRow key={r.id} r={r} />) : <EmptyState icon={FileText} title={tab === 'active' ? 'No active requests' : 'Nothing completed yet'} sub="Pick a legal service and describe your problem. A verified advocate will contact you here." action="Request an advocate" onAction={() => nav('/app/new')} />}
     </div>
   )
 }
 
-function RequestDetail({ me }) {
-  const { id } = useParams()
-  const { s, update } = useStore()
-  const toast = useToast()
-  const r = s.requests.find((x) => x.id === id && x.clientId === me.id)
-  const [pay, setPay] = useState(false)
-  const [confirm, setConfirm] = useState(false)
-  const [dispute, setDispute] = useState(false)
-  if (!r) return <Navigate to="/app/requests" replace />
-  const c = categoryOf(r.category)
-  const a = advById(s, r.advocateId)
-  const advVisible = a && !['submitted', 'assigned'].includes(r.status)
-  const st = REQ_STATUS[r.status]
-  const order = ['submitted', 'assigned', 'quoted', 'paid', 'done', 'completed']
-  const at = r.status === 'accepted' ? 1 : r.status === 'disputed' ? 4 : order.indexOf(r.status)
-  const step = (i) => (r.status === 'completed' || i < at ? 'done' : i === at ? 'now' : 'todo')
+/* ---------------- requests (app: Requests) ---------------- */
+
+function Requests({ meta }) {
+  const nav = useNavigate()
+  const [tab, setTab] = useState('active')
+  const { list, error, reload } = useMyRequests(tab)
   return (
     <div className="flex flex-col gap-4">
-      <PageHead title={c.name} sub={r.id + ' · ' + r.district} back="/app/requests" right={<Pill tone={st.tone}>{st.label}</Pill>} />
+      <PageHead
+        title="My requests"
+        right={
+          <Button icon={Plus} size="sm" onClick={() => nav('/app/new')}>
+            New request
+          </Button>
+        }
+      />
+      <div className="flex border-b border-line">
+        {[
+          ['active', 'Active'],
+          ['completed', 'Completed'],
+        ].map(([k, l]) => (
+          <button key={k} onClick={() => setTab(k)} className={cx('flex-1 h-[46px] text-[14px] font-semibold border-b-[3px]', tab === k ? 'border-gold text-ink' : 'border-transparent text-muted')}>
+            {l}
+          </button>
+        ))}
+      </div>
+      {error ? (
+        <Card className="p-5 flex items-center justify-between gap-3">
+          <span className="text-[14px] text-muted">{error}</span>
+          <Button size="sm" variant="line" onClick={reload}>
+            Try again
+          </Button>
+        </Card>
+      ) : list === null ? (
+        <PageLoader />
+      ) : list.length ? (
+        list.map((r) => <RequestRow key={r.id} r={r} meta={meta} />)
+      ) : (
+        <EmptyState icon={FileText} title={tab === 'active' ? 'No active requests' : 'Nothing completed yet'} sub="Pick a legal service and describe your problem. A verified advocate will contact you here." action="Request an advocate" onAction={() => nav('/app/new')} />
+      )}
+    </div>
+  )
+}
+
+/* ---------------- request detail (app: RequestDetail + Chat) ---------------- */
+
+/** One request from the API, refreshed live. */
+function useClientRequest(id) {
+  const [r, setR] = useState(null)
+  const [error, setError] = useState('')
+  const load = useCallback(async () => {
+    try {
+      setR((await userApi('/client/requests/' + id)).data)
+      setError('')
+    } catch (e) {
+      setError(e.status === 404 ? 'notfound' : errText(e))
+    }
+  }, [id])
+  useEffect(() => {
+    load()
+  }, [load])
+  useLive('user', { 'request:update': (p) => p.number === id && load(), reconnect: load })
+  return { r, error, load }
+}
+
+function LoadFail({ error, onRetry }) {
+  return (
+    <Card className="p-6 flex flex-col items-start gap-3">
+      <p className="font-bold">Could not load this request</p>
+      <p className="text-[14px] text-muted">{error}</p>
+      <Button size="sm" variant="line" onClick={onRetry}>
+        Try again
+      </Button>
+    </Card>
+  )
+}
+
+function RequestDetail({ meta }) {
+  const { id } = useParams()
+  const nav = useNavigate()
+  const toast = useToast()
+  const { r, error, load } = useClientRequest(id)
+
+  if (error === 'notfound') return <Navigate to="/app/requests" replace />
+  if (error) return <LoadFail error={error} onRetry={load} />
+  if (!r) return <PageLoader />
+
+  const c = catOf(meta, r.category)
+  const adv = r.advocate
+  const st = REQ_STATUS[r.status] ?? { label: r.status, tone: 'neutral' }
+  const order = ['submitted', 'assigned', 'quoted', 'paid', 'done', 'completed']
+  const at = r.status === 'disputed' || r.status === 'refunded' ? 4 : order.indexOf(r.status)
+  const step = (i) => (i < at || r.status === 'completed' ? 'done' : i === at ? 'now' : 'todo')
+  const advPhoto = (cls) => (adv?.hasPhoto ? <SecureImage load={userFileUrl} path={'/client/requests/' + r.id + '/advocate/photo'} alt="" className={cls} /> : <span className={cx(cls, 'bg-surface-2')} />)
+  const toCheckout = () => nav('/app/requests/' + r.id + '/checkout')
+
+  return (
+    <div className="flex flex-col gap-4">
+      <PageHead title={c.name} sub={r.id} back="/app/requests" right={<Pill tone={st.tone}>{st.label}</Pill>} />
       <div className="grid gap-5 lg:grid-cols-[380px_1fr]">
         <div className="flex flex-col gap-4">
-          {advVisible ? (
+          {adv ? (
             <Card className="p-4 flex items-center gap-3">
-              <Avatar photo={a.photo} size={48} />
+              {advPhoto('size-12 rounded-full object-cover')}
               <div className="flex-1 min-w-0">
-                <p className="font-bold">Adv. {a.name} <ShieldCheck className="inline size-4 text-green" /></p>
-                <p className="text-[12.5px] text-muted">
-                  <Star className="inline size-3 fill-gold text-gold" /> {a.rating || 'New'} · {a.years} yrs · {a.courts}
+                <p className="font-bold">
+                  {adv.name} {adv.verified ? <ShieldCheck className="inline size-4 text-green" aria-label="Verified" /> : null}
                 </p>
+                <p className="text-[12.5px] text-muted">{[adv.years != null ? adv.years + ' yrs' : null, adv.court].filter(Boolean).join(' · ')}</p>
+                <p className="text-[12px] text-muted">{adv.practice.map((k) => catOf(meta, k).short).join(', ')}</p>
               </div>
             </Card>
           ) : (
@@ -351,72 +580,121 @@ function RequestDetail({ me }) {
               Our team is choosing a verified advocate for you. You will get a notification.
             </Note>
           )}
-          {r.status === 'quoted' ? (
+
+          {r.status === 'quoted' && r.quote ? (
             <Card className="p-4 border-[1.5px] border-ink flex flex-col gap-2.5">
               <div className="flex justify-between">
                 <span className="text-[13px] font-bold text-gold-text">Fee quote</span>
-                <span className="text-[12px] text-muted">Valid till {dateShort(r.quote.validTill)}</span>
+                <span className="text-[12px] text-muted">Valid till {dateShort(new Date(r.quote.validTill).getTime())}</span>
               </div>
               <p className="text-[26px] font-extrabold">{inr(r.quote.fee)}</p>
               <p className="text-[13px] text-text-2">{r.quote.scope}</p>
-              <Button onClick={() => setPay(true)}>Accept and pay</Button>
+              <Button onClick={toCheckout}>Accept and pay</Button>
             </Card>
           ) : null}
+
           {r.status === 'done' ? (
             <Card className="p-4 border-orange flex flex-col gap-2.5">
-              <p className="font-bold">Is the work done?</p>
-              <p className="text-[13px] text-text-2">Confirm to release the payment. If you do nothing, it confirms automatically in {s.settings.autoConfirmDays} days.</p>
+              <p className="font-bold text-[15px]">Is the work done?</p>
+              <p className="text-[13px] text-text-2">
+                Confirm to release the payment to your advocate. If you do nothing, it confirms automatically{r.autoConfirmAt ? ' on ' + dateShort(new Date(r.autoConfirmAt).getTime()) : ''}.
+              </p>
               <div className="flex gap-2">
-                <Button className="flex-1" onClick={() => setConfirm(true)}>Confirm</Button>
-                <Button variant="danger" onClick={() => setDispute(true)}>Raise a dispute</Button>
+                <Button className="flex-1" onClick={() => nav('/app/requests/' + r.id + '/confirm')}>
+                  Confirm
+                </Button>
+                <Button variant="danger" onClick={() => nav('/app/requests/' + r.id + '/dispute')}>
+                  Raise a dispute
+                </Button>
               </div>
             </Card>
           ) : null}
+          {r.status === 'paid' ? (
+            <button onClick={() => nav('/app/requests/' + r.id + '/dispute')} className="self-start text-[13px] font-semibold text-red">
+              Problem with the work? Raise a dispute
+            </button>
+          ) : null}
           {r.status === 'disputed' ? <Note tone="orange">Dispute raised: {r.dispute?.reason}. The payment is on hold while our team reviews it.</Note> : null}
+          {r.status === 'refunded' ? (
+            <Note tone="neutral">
+              Refunded{r.dispute?.note ? ': ' + r.dispute.note : ''}. {r.paid?.refund === 'processed' ? 'The money is on its way back to you.' : 'Our team is processing it.'}
+            </Note>
+          ) : null}
+
           <Card className="p-4">
             <Timeline
               steps={[
-                { title: 'Request submitted', sub: dateShort(r.createdAt), state: step(0) },
-                { title: 'Advocate assigned', sub: advVisible ? 'Adv. ' + a.name : undefined, state: step(1) },
+                { title: 'Request submitted', sub: dateShort(new Date(r.createdAt).getTime()), state: step(0) },
+                { title: 'Advocate assigned', sub: adv?.name, state: step(1) },
                 { title: 'Fee quote', sub: r.quote ? inr(r.quote.fee) : undefined, state: step(2) },
                 { title: 'Paid', sub: r.paid ? inr(r.paid.total) + ' · held safely' : undefined, state: step(3) },
-                { title: r.status === 'disputed' ? 'Disputed' : 'Work done', state: step(4) },
+                { title: r.status === 'disputed' ? 'Disputed' : r.status === 'refunded' ? 'Refunded' : 'Work done', sub: r.status === 'disputed' ? 'Our team is reviewing' : undefined, state: step(4) },
                 { title: 'Confirmed', state: step(5) },
               ]}
             />
           </Card>
+
           <Card className="p-4 flex flex-col gap-2">
             <p className="font-bold text-[14px]">Your request</p>
             <p className="text-[13.5px] text-text-2 leading-relaxed">{r.issue}</p>
-            <p className="text-[12px] text-muted">{r.district} · {r.lang}{r.docs?.length ? ' · ' + r.docs.length + ' documents' : ''}</p>
+            <p className="text-[12px] text-muted">
+              {r.district} · {r.lang}
+              {r.docs.length ? ' · ' + r.docs.length + ' documents' : ''}
+            </p>
+            {r.docs.length ? (
+              <div className="flex flex-wrap gap-2 mt-1">
+                {r.docs.map((d) => (
+                  <SecureImage key={d.id} load={userFileUrl} path={'/client/requests/' + r.id + '/attachments/' + d.id} alt="Document" className="size-16 rounded-lg object-cover" />
+                ))}
+              </div>
+            ) : null}
           </Card>
+
           {r.paid ? (
             <Card className="p-4 flex flex-col gap-2">
               <p className="font-bold text-[14px]">Payment</p>
               <BillRow label="Advocate's fee" value={inr(r.paid.fee)} />
-              {r.paid.discount ? <BillRow label={'Offer ' + (r.paid.offer ?? '')} value={'−' + inr(r.paid.discount)} tone="green" /> : null}
+              {r.paid.discount ? <BillRow label="Offer" value={'−' + inr(r.paid.discount)} tone="green" /> : null}
               <BillRow label="GST" value={inr(r.paid.gst)} />
               {r.paid.wallet ? <BillRow label="Wallet" value={'−' + inr(r.paid.wallet)} tone="green" /> : null}
+              <span className="h-px bg-line" />
               <BillRow label="Paid" value={inr(r.paid.total)} strong />
-              <button onClick={() => toast('GST invoices are emailed once the payment gateway is connected.')} className="self-start text-[13px] font-semibold text-gold-text">
-                GST invoice (PDF)
+              <p className="text-[12px] text-muted">
+                {r.paid.id} · {dateShort(new Date(r.paid.at).getTime())}
+              </p>
+              <button onClick={() => openInvoice(r.paid.id).catch((e) => toast(errText(e), 'red'))} className="self-start text-[13px] font-semibold text-gold-text">
+                Download GST invoice ›
               </button>
             </Card>
           ) : null}
+
+          {r.rating ? (
+            <Card className="p-4 flex items-center gap-2">
+              <span className="text-[14px] font-semibold">Your rating</span>
+              <span className="flex gap-0.5">
+                {[1, 2, 3, 4, 5].map((k) => (
+                  <Star key={k} className={cx('size-4 text-gold', k <= r.rating && 'fill-gold')} />
+                ))}
+              </span>
+            </Card>
+          ) : null}
         </div>
-        {advVisible ? (
-          <ChatPanel
-            reqId={r.id}
-            me="client"
-            closed={r.status === 'completed'}
-            onPay={r.status === 'quoted' ? () => setPay(true) : undefined}
+
+        {adv ? (
+          <LiveChat
+            number={r.id}
+            side="client"
+            status={r.status}
+            closed={['completed', 'refunded'].includes(r.status)}
+            onPay={toCheckout}
             headerSlot={
               <div className="flex items-center gap-3 px-4 py-3 border-b border-line">
-                <Avatar photo={a.photo} size={36} />
+                {advPhoto('size-9 rounded-full object-cover')}
                 <div>
-                  <p className="font-bold text-[14px]">Adv. {a.name}</p>
-                  <p className="text-[12px] text-muted">{a.years} yrs · {a.languages}</p>
+                  <p className="font-bold text-[14px]">{adv.name}</p>
+                  <p className="text-[12px] text-muted">{adv.years != null ? adv.years + ' yrs · ' : ''}Verified advocate</p>
                 </div>
+                <MessageCircle className="size-5 text-muted ml-auto" />
               </div>
             }
           />
@@ -430,108 +708,228 @@ function RequestDetail({ me }) {
           </Card>
         )}
       </div>
-      <Checkout open={pay} onClose={() => setPay(false)} r={r} me={me} />
-      <ConfirmModal open={confirm} onClose={() => setConfirm(false)} r={r} />
-      <DisputeModal open={dispute} onClose={() => setDispute(false)} r={r} />
     </div>
   )
 }
 
-function Checkout({ open, onClose, r, me }) {
-  const { s, update } = useStore()
+/* ---------------- checkout (app: Checkout) ---------------- */
+
+function Checkout({ meta }) {
+  const { id } = useParams()
+  const nav = useNavigate()
   const toast = useToast()
-  const offerOk = !me.usedFirst10
-  const [useOffer, setUseOffer] = useState(offerOk)
-  const [useWallet, setUseWallet] = useState(me.wallet > 0)
-  const [busy, setBusy] = useState(false)
-  const bill = useMemo(() => {
-    if (!r.quote) return null
-    const discount = useOffer && offerOk ? offerDiscount(r.quote.fee, { percent: 10, max: 500 }) : 0
-    return clientBill(r.quote.fee, { discount, gstOnService: categoryOf(r.category).gstOnService, wallet: useWallet ? me.wallet : 0, rates: ratesFor(s, r.category) })
-  }, [r, useOffer, offerOk, useWallet, me.wallet, s])
-  if (!bill) return null
+  const { r, error, load } = useClientRequest(id)
+  const [useWallet, setUseWallet] = useState(true)
+  const [bill, setBill] = useState(null)
+  const [billError, setBillError] = useState('')
+  const [paying, setPaying] = useState(false)
+  const [typed, setTyped] = useState('')
+  const [code, setCode] = useState('')
+  const [codeError, setCodeError] = useState('')
+  const { pay, dialog } = useGatewayPay()
+
+  useEffect(() => {
+    let live = true
+    userApi('/client/requests/' + id + '/checkout?useWallet=' + (useWallet ? 1 : 0) + (code ? '&code=' + encodeURIComponent(code) : ''))
+      .then((j) => live && (setBill(j.data), setBillError(''), setCodeError('')))
+      .catch((e) => {
+        if (!live) return
+        // A bad coupon: say why, and go back to the bill without it.
+        if (code) {
+          setCodeError(errText(e))
+          setCode('')
+        } else setBillError(errText(e))
+      })
+    return () => {
+      live = false
+    }
+  }, [id, useWallet, code])
+
+  if (error === 'notfound') return <Navigate to="/app/requests" replace />
+  if (error) return <LoadFail error={error} onRetry={load} />
+  if (!r) return <PageLoader />
+  if (r.status !== 'quoted') return <Navigate to={'/app/requests/' + id} replace />
+  const c = catOf(meta, r.category)
+
+  const go = async () => {
+    setPaying(true)
+    try {
+      const co = (await userApi('/client/requests/' + id + '/checkout', { method: 'POST', body: { useWallet: useWallet && bill.walletBalance > 0, ...(code ? { code } : {}) } })).data
+      const paid = await pay(co, { description: c.name + ' · ' + id })
+      nav('/app/requests/' + id + '/paid?total=' + (paid.total + paid.wallet), { replace: true })
+    } catch (e) {
+      if (e.code !== 'CANCELLED') toast(errText(e), 'red')
+      setPaying(false)
+    }
+  }
+
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="Checkout"
-      footer={
-        <>
-          <span className="mr-auto self-center text-[19px] font-extrabold">{inr(bill.total)}</span>
-          <Button
-            loading={busy}
-            onClick={() => {
-              setBusy(true)
-              setTimeout(() => {
-                update((x) => act.payRequest(x, r.id, { useOffer: useOffer && offerOk, useWallet }))
-                setBusy(false)
-                onClose()
-                toast('Payment successful. Your money is held safely.', 'green')
-              }, 1200)
-            }}>
-            Pay securely
-          </Button>
-        </>
-      }>
-      <div className="flex items-center gap-3">
-        <span className="grid size-10 place-items-center rounded-[10px] bg-gold-tint">
-          <Tag className="size-5 text-gold-text" />
-        </span>
-        <div className="flex-1">
-          <p className="font-bold text-[14px]">FIRST10</p>
-          <p className={cx('text-[12px]', useOffer && offerOk ? 'text-green' : 'text-muted')}>{!offerOk ? 'Already used on your first consultation' : useOffer ? 'Applied · 10% off, up to ₹500' : 'Tap to apply · 10% off up to ₹500'}</p>
+    <div className="flex flex-col gap-3.5 max-w-xl">
+      <PageHead title="Checkout" back />
+      <Card className="p-4 flex items-center gap-3">
+        {r.advocate?.hasPhoto ? <SecureImage load={userFileUrl} path={'/client/requests/' + id + '/advocate/photo'} alt="" className="size-12 rounded-xl object-cover" /> : null}
+        <div>
+          <p className="font-bold text-[14px]">{c.name}</p>
+          <p className="text-[12px] font-medium text-muted">
+            {r.advocate?.name} · Request {id}
+          </p>
         </div>
-        {offerOk ? <Toggle checked={useOffer} onChange={setUseOffer} label="Apply offer" /> : null}
-      </div>
-      <div className="flex items-center gap-3">
+      </Card>
+      <Card className="p-4 flex items-center gap-3">
         <span className="grid size-10 place-items-center rounded-[10px] bg-ink">
           <Wallet className="size-5 text-gold" />
         </span>
         <div className="flex-1">
           <p className="font-bold text-[14px]">Use wallet balance</p>
-          <p className="text-[12px] text-muted">{inr(me.wallet)} available</p>
+          <p className="text-[12px] font-medium text-muted">{bill ? inr(bill.walletBalance) + ' available' : '…'}</p>
         </div>
-        <Toggle checked={useWallet && me.wallet > 0} onChange={(v) => me.wallet > 0 && setUseWallet(v)} label="Use wallet" />
-      </div>
-      <div className="rounded-xl border border-line p-4 flex flex-col gap-2.5">
-        <BillRow label="Advocate's fee" value={inr(bill.fee)} />
-        {bill.discount ? <BillRow label="Offer FIRST10 (10%)" value={'−' + inr(bill.discount)} tone="green" /> : null}
-        <BillRow label={categoryOf(r.category).gstOnService ? 'GST ' + Math.round(s.settings.gst * 100) + '% on ' + inr(bill.base) : 'GST (not charged on this service)'} value={inr(bill.gst)} />
-        {bill.wallet ? <BillRow label="Wallet" value={'−' + inr(bill.wallet)} tone="green" /> : null}
-        <BillRow label="To pay" value={inr(bill.total)} strong />
-      </div>
+        <Toggle checked={useWallet && (bill?.walletBalance ?? 0) > 0} onChange={(v) => (bill?.walletBalance ?? 0) > 0 && setUseWallet(v)} label="Use wallet" />
+      </Card>
+      <Card className="p-4 flex flex-col gap-2">
+        <form className="flex gap-2" onSubmit={(e) => (e.preventDefault(), setCode(typed.trim().toUpperCase()))}>
+          <input value={typed} onChange={(e) => setTyped(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))} maxLength={20} placeholder="Coupon code" aria-label="Coupon code" className="flex-1 h-11 rounded-xl border border-line-strong px-3 text-[14px] font-semibold tracking-wide outline-none focus:border-ink" />
+          {code ? (
+            <Button type="button" variant="line" onClick={() => (setCode(''), setTyped(''))}>Remove</Button>
+          ) : (
+            <Button type="submit" variant="line" disabled={typed.length < 3}>Apply</Button>
+          )}
+        </form>
+        {codeError ? <p className="text-[12.5px] text-red">{codeError}</p> : null}
+        {bill?.offer ? (
+          <p className="text-[12.5px] font-semibold text-green">
+            {bill.offer.code ? bill.offer.code + ' · ' : 'Applied automatically · '}
+            {bill.offer.title}
+            {bill.offer.cashback ? ' · ' + inr(bill.offer.cashback) + ' cashback to your wallet after you confirm the work' : ''}
+          </p>
+        ) : (
+          <Link to="/app/offers" className="text-[12.5px] font-semibold text-gold-text self-start">See offers ›</Link>
+        )}
+      </Card>
+      {billError ? <Note tone="orange">{billError}</Note> : null}
+      {bill ? (
+        <Card className="p-4 flex flex-col gap-2.5">
+          <p className="font-bold text-[15px]">Bill details</p>
+          <BillRow label="Advocate's fee" value={inr(bill.fee)} />
+          {bill.discount ? <BillRow label={'Offer' + (bill.offer?.code ? ' ' + bill.offer.code : '')} value={'−' + inr(bill.discount)} tone="green" /> : null}
+          <BillRow label={bill.gstOnService ? 'GST ' + bill.gstPercent + '% on ' + inr(bill.base) : 'GST (not charged on this service)'} value={inr(bill.gst)} />
+          {bill.wallet ? <BillRow label="Wallet" value={'−' + inr(bill.wallet)} tone="green" /> : null}
+          <span className="h-px bg-line" />
+          <BillRow label="To pay" value={inr(bill.total)} strong />
+        </Card>
+      ) : null}
       <Note icon={ShieldCheck}>Vakeel Bhai holds this payment. It goes to your advocate only after you confirm the work is done.</Note>
-      <Note tone="gold">Demo: no real payment is taken. Razorpay (UPI, cards, netbanking) is connected in the backend phase.</Note>
-    </Modal>
+      <div className="flex items-center gap-4 mt-1">
+        <div>
+          <p className="text-[19px] font-extrabold">{bill ? inr(bill.total) : '—'}</p>
+          <p className="text-[11.5px] font-medium text-muted">UPI, cards, netbanking</p>
+        </div>
+        <Button size="lg" className="flex-1" loading={paying} disabled={!bill || !!billError} onClick={go}>
+          {paying ? 'Processing…' : 'Pay securely'}
+        </Button>
+      </div>
+      {dialog}
+    </div>
   )
 }
 
-function ConfirmModal({ open, onClose, r }) {
-  const { update } = useStore()
+/** The app's PaymentDone screen. */
+function PaymentDone() {
+  const { id } = useParams()
+  const [q] = useSearchParams()
+  const nav = useNavigate()
+  return (
+    <div className="rounded-2xl bg-ink p-8 sm:p-12 flex flex-col gap-5 max-w-xl">
+      <span className="grid size-[72px] place-items-center rounded-full bg-green">
+        <ShieldCheck className="size-9 text-white" />
+      </span>
+      <h1 className="font-serif font-bold text-[28px] text-white">Payment successful</h1>
+      {q.get('total') ? <p className="text-[32px] font-extrabold text-gold">{inr(Number(q.get('total')))}</p> : null}
+      <p className="text-[15px] leading-relaxed text-on-ink">Your money is held safely. Your advocate starts the work now, and it is released only when you confirm.</p>
+      <div className="flex flex-col gap-2.5 mt-2">
+        <Button size="lg" onClick={() => nav('/app/requests/' + id, { replace: true })}>
+          Back to my request
+        </Button>
+        <Button size="lg" variant="line" onClick={() => nav('/app', { replace: true })}>
+          Go home
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/* ---------------- confirm & dispute (app: Confirm, Dispute) ---------------- */
+
+function ConfirmPage() {
+  const { id } = useParams()
+  const nav = useNavigate()
+  const toast = useToast()
+  const { r, error } = useClientRequest(id)
   const [stars, setStars] = useState(5)
   const [review, setReview] = useState('')
+  const [busy, setBusy] = useState(false)
+  if (error) return <Navigate to={'/app/requests/' + id} replace />
+  if (!r) return <PageLoader />
+  if (r.status !== 'done') return <Navigate to={'/app/requests/' + id} replace />
+  const confirm = async () => {
+    setBusy(true)
+    try {
+      await userApi('/client/requests/' + id + '/confirm', { method: 'POST', body: { rating: stars, ...(review.trim() ? { review: review.trim() } : {}) } })
+      toast('Thank you. The payment was released to your advocate.', 'green')
+      nav('/app/requests/' + id, { replace: true })
+    } catch (e) {
+      toast(errText(e), 'red')
+      setBusy(false)
+    }
+  }
   return (
-    <Modal open={open} onClose={onClose} title="Confirm and rate" footer={<Button onClick={() => { update((x) => act.confirmRequest(x, r.id, stars, review)); onClose() }}>Confirm work is done</Button>}>
-      <p className="font-bold text-center">How was your experience?</p>
-      <div className="flex justify-center gap-2">
+    <div className="flex flex-col gap-4 max-w-xl">
+      <PageHead title="Confirm and rate" back />
+      {r.advocate ? (
+        <Card className="p-4 flex items-center gap-3">
+          {r.advocate.hasPhoto ? <SecureImage load={userFileUrl} path={'/client/requests/' + id + '/advocate/photo'} alt="" className="size-11 rounded-full object-cover" /> : null}
+          <p className="font-bold">
+            {r.advocate.name} <ShieldCheck className="inline size-4 text-green" />
+          </p>
+        </Card>
+      ) : null}
+      <p className="text-[17px] font-bold text-center">How was your experience?</p>
+      <div className="flex justify-center gap-2.5">
         {[1, 2, 3, 4, 5].map((k) => (
           <button key={k} onClick={() => setStars(k)} aria-label={k + ' stars'}>
-            <Star className={cx('size-9 text-gold', k <= stars && 'fill-gold')} />
+            <Star className={cx('size-[38px] text-gold', k <= stars && 'fill-gold')} />
           </button>
         ))}
       </div>
-      <Field label="Review (optional)" as="textarea" value={review} onChange={(e) => setReview(e.target.value)} />
-      <Note icon={ShieldCheck}>Confirming releases the payment to the advocate. Do this only when the agreed work is done.</Note>
-    </Modal>
+      <Field label="Review (optional)" as="textarea" value={review} onChange={(e) => setReview(e.target.value)} maxLength={1000} placeholder="What went well? Your review helps other clients." />
+      <Note icon={ShieldCheck}>Confirming releases the payment to the advocate. Do this only when the work you agreed on is done.</Note>
+      <Button size="lg" loading={busy} onClick={confirm}>
+        Confirm work is done
+      </Button>
+    </div>
   )
 }
 
-function DisputeModal({ open, onClose, r }) {
-  const { update } = useStore()
+function DisputePage() {
+  const { id } = useParams()
+  const nav = useNavigate()
+  const toast = useToast()
   const [reason, setReason] = useState(DISPUTE_REASONS[0])
   const [detail, setDetail] = useState('')
+  const [busy, setBusy] = useState(false)
+  const submit = async () => {
+    setBusy(true)
+    try {
+      await userApi('/client/requests/' + id + '/dispute', { method: 'POST', body: { reason: reason + ': ' + detail.trim() } })
+      toast('Dispute raised. Our team will reply in your chat.', 'green')
+      nav('/app/requests/' + id, { replace: true })
+    } catch (e) {
+      toast(errText(e), 'red')
+      setBusy(false)
+    }
+  }
   return (
-    <Modal open={open} onClose={onClose} title="Raise a dispute" footer={<Button variant="ink" disabled={detail.trim().length < 10} onClick={() => { update((x) => act.disputeRequest(x, r.id, reason + ': ' + detail.trim())); onClose() }}>Submit dispute</Button>}>
+    <div className="flex flex-col gap-4 max-w-xl">
+      <PageHead title="Raise a dispute" back />
       <Note tone="orange">The payment stays on hold while our team reviews. We reply in your request chat within 24 hours.</Note>
       <div className="flex flex-wrap gap-2">
         {DISPUTE_REASONS.map((x) => (
@@ -540,216 +938,53 @@ function DisputeModal({ open, onClose, r }) {
           </Chip>
         ))}
       </div>
-      <Field label="Tell us more" as="textarea" value={detail} onChange={(e) => setDetail(e.target.value)} />
-    </Modal>
-  )
-}
-
-/* ---------------- e-Challan ---------------- */
-
-function Challan({ me }) {
-  const { update } = useStore()
-  const [q] = useSearchParams()
-  const qv = q.get('vehicle')
-  useEffect(() => {
-    if (qv && qv.replace(/\s/g, '').length >= 8 && !me.vehicles.some((v) => v.number.replace(/\s/g, '') === qv.replace(/\s/g, ''))) update((x) => act.addVehicle(x, me.id, qv))
-  }, [qv, me.id, me.vehicles, update])
-  const vehicles = me.vehicles.length ? me.vehicles : [{ number: 'MP 09 AB 1234', model: 'Hyundai i20 · Petrol' }]
-  const [vi, setVi] = useState(0)
-  const v = vehicles[Math.min(vi, vehicles.length - 1)]
-  const [tab, setTab] = useState('pending')
-  const [sel, setSel] = useState([])
-  const [adding, setAdding] = useState('')
-  const [receipt, setReceipt] = useState(null)
-  const [busy, setBusy] = useState(false)
-  const paidIds = me.paidChallans.map((p) => p.id)
-  const pending = CHALLANS.filter((c) => c.vehicle === v.number && !paidIds.includes(c.id))
-  const paid = me.paidChallans.filter((p) => p.vehicle === v.number)
-  const chosen = pending.filter((c) => sel.includes(c.id))
-  const total = chosen.reduce((a, c) => a + c.amount, 0)
-  return (
-    <div className="flex flex-col gap-4 max-w-3xl">
-      <PageHead title="e-Challan" sub="Check and pay traffic challans for your vehicles" />
-      <div className="flex flex-wrap gap-2">
-        {vehicles.map((x, k) => (
-          <button key={x.number} onClick={() => { setVi(k); setSel([]) }} className={cx('rounded-xl px-4 py-2.5 text-left border', k === vi ? 'bg-ink text-white border-ink' : 'bg-white border-line')}>
-            <span className="block font-extrabold tracking-wider text-[14px]">{x.number}</span>
-            <span className={cx('block text-[11.5px]', k === vi ? 'text-on-ink-muted' : 'text-muted')}>{x.model}</span>
-          </button>
-        ))}
-        <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); update((x) => act.addVehicle(x, me.id, adding.trim())); setAdding(''); setVi(vehicles.length) }}>
-          <input value={adding} onChange={(e) => setAdding(e.target.value.toUpperCase())} placeholder="Add vehicle no." aria-label="Vehicle number" className="h-[58px] w-44 rounded-xl border border-line-strong bg-white px-3 text-[14px] font-semibold outline-none focus:border-ink" />
-          <Button type="submit" variant="line" className="h-[58px]" disabled={adding.replace(/\s/g, '').length < 8} icon={Plus}>
-            Add
-          </Button>
-        </form>
-      </div>
-      <div className="flex gap-2">
-        <Chip active={tab === 'pending'} onClick={() => setTab('pending')}>Pending ({pending.length})</Chip>
-        <Chip active={tab === 'paid'} onClick={() => setTab('paid')}>Paid ({paid.length})</Chip>
-      </div>
-      {tab === 'pending' ? (
-        pending.length ? (
-          <>
-            {pending.map((c) => {
-              const on = sel.includes(c.id)
-              return (
-                <button key={c.id} onClick={() => setSel(on ? sel.filter((x) => x !== c.id) : [...sel, c.id])} aria-pressed={on} className={cx('card p-4 flex gap-3 text-left', on && 'border-ink border-[1.5px]')}>
-                  <CheckBox checked={on} />
-                  <span className="flex-1 flex flex-col gap-1">
-                    <span className="flex justify-between font-bold text-[14px]">
-                      {c.offence} <span>{inr(c.amount)}</span>
-                    </span>
-                    <span className="text-[12px] text-muted">{c.place}</span>
-                    <span className="text-[12px] text-muted">{c.id} · {c.date}</span>
-                    <Pill tone={c.overdue ? 'red' : 'orange'} dot={false} className="self-start mt-1">
-                      {c.due}
-                    </Pill>
-                  </span>
-                </button>
-              )
-            })}
-            <div className="card p-4 flex items-center gap-4 sticky bottom-20 lg:bottom-4">
-              <div>
-                <p className="text-[19px] font-extrabold">{inr(total)}</p>
-                <p className="text-[12px] text-muted">{chosen.length} of {pending.length} selected</p>
-              </div>
-              <Button
-                className="flex-1"
-                size="lg"
-                disabled={!chosen.length}
-                loading={busy}
-                onClick={() => {
-                  setBusy(true)
-                  setTimeout(() => {
-                    let res
-                    update((x) => {
-                      res = act.payChallans(x, me.id, chosen.map((c) => c.id))
-                      return res.s
-                    })
-                    setReceipt({ receipt: res.receipt, total: res.total, items: chosen })
-                    setSel([])
-                    setBusy(false)
-                  }, 1000)
-                }}>
-                Pay challans
-              </Button>
-            </div>
-          </>
-        ) : (
-          <EmptyState icon={CircleCheck} title="No pending challans" sub="This vehicle has nothing to pay right now." />
-        )
-      ) : paid.length ? (
-        paid.map((p) => (
-          <Card key={p.id + p.paidOn} className="p-4 flex justify-between items-center gap-3">
-            <div>
-              <p className="font-bold text-[14px]">{p.offence}</p>
-              <p className="text-[12px] text-muted">{p.id} · paid {p.paidOn} · receipt {p.receipt}</p>
-            </div>
-            <span className="font-bold">{inr(p.amount)}</span>
-          </Card>
-        ))
-      ) : (
-        <EmptyState icon={Receipt} title="No paid challans yet" />
-      )}
-      <p className="text-[12px] text-muted">Sample challans. Live data comes from the e-Challan provider chosen in the backend phase.</p>
-      <Modal open={!!receipt} onClose={() => setReceipt(null)} title="Payment receipt" footer={<Button onClick={() => setReceipt(null)}>Done</Button>}>
-        {receipt ? (
-          <>
-            <div className="flex flex-col items-center gap-1.5 py-2">
-              <CircleCheck className="size-12 text-green" />
-              <p className="font-bold text-[18px]">Challan payment successful</p>
-              <p className="text-[28px] font-extrabold">{inr(receipt.total)}</p>
-              <p className="text-[12.5px] text-muted">Receipt {receipt.receipt} · {dateShort(Date.now())}</p>
-            </div>
-            {receipt.items.map((c) => (
-              <BillRow key={c.id} label={c.offence + ' · ' + c.id} value={inr(c.amount)} />
-            ))}
-            <Note tone="gold">Demo: no real payment was made.</Note>
-          </>
-        ) : null}
-      </Modal>
-    </div>
-  )
-}
-
-/* ---------------- GST filing ---------------- */
-
-function Gst({ me }) {
-  const { s, update } = useStore()
-  const toast = useToast()
-  const [f, setF] = useState({ returnType: 'GSTR-3B', gstin: '', period: 'October 2026', note: '' })
-  const isReg = f.returnType === 'New GST registration'
-  const ok = (isReg || /^[0-9A-Z]{15}$/.test(f.gstin)) && f.period.trim().length > 2
-  const mine = s.gstRequests.filter((g) => g.clientId === me.id)
-  const tone = { Requested: 'neutral', 'In review': 'blue', 'Documents needed': 'orange', Filed: 'green', Closed: 'green' }
-  return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
-      <div className="flex flex-col gap-4">
-        <PageHead title="GST filing" sub="Our team files your returns. You track every step here." />
-        <div className="flex flex-wrap gap-2">
-          {GST_RETURNS.map((r) => (
-            <Chip key={r} active={f.returnType === r} onClick={() => setF({ ...f, returnType: r })}>
-              {r}
-            </Chip>
-          ))}
-        </div>
-        {!isReg ? <Field label="GSTIN" maxLength={15} value={f.gstin} onChange={(e) => setF({ ...f, gstin: e.target.value.toUpperCase().replace(/[^0-9A-Z]/g, '') })} placeholder="15-character GSTIN" /> : null}
-        <Field label={isReg ? 'Business name' : 'Return period'} value={f.period} onChange={(e) => setF({ ...f, period: e.target.value })} />
-        <Field label="Anything we should know? (optional)" as="textarea" value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} />
-        <Button
-          size="lg"
-          disabled={!ok}
-          onClick={() => {
-            update((x) => act.requestGst(x, me.id, { ...f, gstin: isReg ? '' : f.gstin }))
-            setF({ ...f, gstin: '', note: '' })
-            toast('Request sent. Our team will reply here.', 'green')
-          }}>
-          Request GST filing
-        </Button>
-      </div>
-      <div className="flex flex-col gap-3">
-        <SectionTitle title="Your requests" />
-        {mine.length ? (
-          mine.map((g) => (
-            <Card key={g.id} className="p-4 flex flex-col gap-1.5">
-              <div className="flex justify-between gap-2">
-                <span className="font-bold text-[14px]">{g.id} · {g.returnType}</span>
-                <Pill tone={tone[g.status]}>{g.status}</Pill>
-              </div>
-              <span className="text-[12.5px] text-muted">{(g.gstin || 'New registration') + ' · ' + g.period + ' · ' + dateShort(g.at)}</span>
-            </Card>
-          ))
-        ) : (
-          <Card className="p-5 text-[13px] text-muted">No GST requests yet. The service fee is shown before our team starts.</Card>
-        )}
-      </div>
+      <Field label="Tell us more" as="textarea" value={detail} onChange={(e) => setDetail(e.target.value)} maxLength={900} placeholder="What happened?" />
+      <Button size="lg" variant="ink" loading={busy} disabled={detail.trim().length < 10} onClick={submit}>
+        Submit dispute
+      </Button>
     </div>
   )
 }
 
 /* ---------------- wallet, refer, offers, profile ---------------- */
 
-function ClientWallet({ me }) {
+/** The app's ClientWallet, from the API. */
+function ClientWallet() {
+  const [w, setW] = useState(null)
+  const [error, setError] = useState('')
+  const load = useCallback(async () => {
+    try {
+      setW((await userApi('/client/wallet')).data)
+      setError('')
+    } catch (e) {
+      setError(errText(e))
+    }
+  }, [])
+  useEffect(() => {
+    load()
+  }, [load])
+  useLive('user', { 'request:update': load, reconnect: load })
+  if (error) return <LoadFail error={error} onRetry={load} />
+  if (!w) return <PageLoader />
   return (
     <div className="flex flex-col gap-4 max-w-2xl">
       <PageHead title="Wallet" />
       <div className="rounded-2xl bg-ink p-6 flex flex-col gap-3">
         <span className="text-[12px] text-on-ink-muted">Wallet balance</span>
-        <span className="text-[32px] font-extrabold text-white">{inr(me.wallet)}</span>
+        <span className="text-[32px] font-extrabold text-white">{inr(w.balance)}</span>
         <span className="text-[13px] text-on-ink">Use it at checkout. Referral rewards and cashback land here. Wallet money cannot be withdrawn.</span>
         <Link to="/app/refer" className="self-start h-10 px-4 inline-flex items-center gap-2 rounded-[10px] bg-gold font-bold text-[14px]">
           <Gift className="size-4" /> Refer and earn
         </Link>
       </div>
       <SectionTitle title="History" />
-      {me.walletTx.length ? (
-        me.walletTx.map((t) => (
+      {w.tx.length ? (
+        w.tx.map((t) => (
           <Card key={t.id} className="p-4 flex items-center gap-3">
             <span className={cx('grid size-10 place-items-center rounded-[10px]', t.amount >= 0 ? 'bg-green-soft' : 'bg-surface-2')}>{t.amount >= 0 ? <Gift className="size-5 text-green" /> : <Receipt className="size-5" />}</span>
             <div className="flex-1">
               <p className="font-bold text-[14px]">{t.title}</p>
-              <p className="text-[12px] text-muted">{dateShort(t.at)}</p>
+              <p className="text-[12px] text-muted">{(t.sub ? t.sub + ' · ' : '') + dateShort(new Date(t.at).getTime())}</p>
             </div>
             <span className={cx('font-extrabold', t.amount >= 0 && 'text-green')}>{(t.amount >= 0 ? '+' : '') + inr(t.amount)}</span>
           </Card>
@@ -761,97 +996,55 @@ function ClientWallet({ me }) {
   )
 }
 
-function Refer({ me }) {
-  const { s } = useStore()
+function Profile({ me, onSaved, onLogout }) {
   const toast = useToast()
-  const code = me.referralCode || 'VBUSER123'
-  return (
-    <div className="flex flex-col gap-4 max-w-2xl">
-      <PageHead title="Refer and earn" />
-      <div className="rounded-2xl bg-ink p-7 flex flex-col items-center text-center gap-3">
-        <Gift className="size-10 text-gold" />
-        <p className="font-serif font-bold text-[24px] text-white">Earn {inr(s.settings.referralReward)} for every friend</p>
-        <p className="text-[14px] text-on-ink max-w-md">When a friend joins with your code and completes their first paid service, the reward lands in your wallet.</p>
-        <button
-          onClick={() => {
-            navigator.clipboard?.writeText(code)
-            toast('Code copied')
-          }}
-          className="flex items-center gap-2.5 border-[1.5px] border-dashed border-gold rounded-xl px-5 py-2.5 text-gold text-[20px] font-extrabold tracking-wider">
-          {code} <Copy className="size-5" />
-        </button>
-      </div>
-      <Card className="p-5 flex flex-col gap-3">
-        <p className="font-bold">How it works</p>
-        {['Share your code with a friend', 'They sign up and enter your code', 'You earn when their first paid service is confirmed'].map((t, i) => (
-          <p key={t} className="flex items-center gap-3 text-[14px]">
-            <span className="grid size-6 place-items-center rounded-full bg-ink text-gold text-[12px] font-bold">{i + 1}</span>
-            {t}
-          </p>
-        ))}
-        {!s.settings.referralOn ? <Note tone="orange">Refer and earn is paused right now.</Note> : null}
-      </Card>
-    </div>
-  )
-}
-
-function Offers({ me }) {
-  const { s } = useStore()
-  return (
-    <div className="flex flex-col gap-4 max-w-3xl">
-      <PageHead title="Offers" back />
-      <div className="grid gap-4 sm:grid-cols-2">
-        {s.settings.offers.filter((o) => o.active).map((o) => (
-          <Card key={o.code} className="overflow-hidden">
-            <img src={o.code === 'FIRST10' ? IMG.bannerGavel : IMG.bannerConsult} alt="" className="w-full h-32 object-cover" />
-            <div className="p-4 flex flex-col gap-2">
-              <p className="font-bold">{o.title}</p>
-              <div className="flex justify-between items-center">
-                <span className="rounded-lg border border-dashed border-gold bg-gold-wash px-2.5 py-1 font-extrabold text-gold-text text-[13px]">{o.code}</span>
-                <span className="text-[12px] font-semibold text-green">{o.code === 'FIRST10' && me.usedFirst10 ? 'Used' : 'Till ' + o.till}</span>
-              </div>
-            </div>
-          </Card>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function Profile({ me }) {
-  const { update } = useStore()
-  const toast = useToast()
-  const [f, setF] = useState({ name: me.name, email: me.email, city: me.city, state: me.state })
+  const [f, setF] = useState({ name: me.name, email: me.email, city: me.city || 'Indore', state: me.state || 'Madhya Pradesh' })
+  const [busy, setBusy] = useState(false)
+  const save = async () => {
+    setBusy(true)
+    try {
+      onSaved((await userApi('/client/profile', { method: 'PATCH', body: { ...f, name: f.name.trim(), email: f.email.trim() } })).data)
+      toast('Saved', 'green')
+    } catch (e) {
+      toast(errText(e), 'red')
+    } finally {
+      setBusy(false)
+    }
+  }
   return (
     <div className="flex flex-col gap-4 max-w-xl">
       <PageHead title="Profile" />
       <Card className="p-5 flex items-center gap-4">
-        <Avatar photo={me.photo} size={56} />
+        <span className="grid size-14 place-items-center rounded-full bg-surface-2">
+          <User className="size-7 text-[#4A4740]" />
+        </span>
         <div>
           <p className="font-bold text-[17px]">{me.name}</p>
           <p className="text-[13px] text-muted">+91 {phonePretty(me.phone)}</p>
         </div>
       </Card>
       <Card className="p-5 flex flex-col gap-4">
-        <Field label="Name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
-        <Field label="Email (for invoices)" type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
+        <Field label="Name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} maxLength={80} />
+        <Field label="Email (for invoices)" type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} maxLength={120} />
         <div className="grid grid-cols-2 gap-3">
-          <Select label="City / district" value={f.city} onChange={(e) => setF({ ...f, city: e.target.value })} options={DISTRICTS} />
-          <Select label="State" value={f.state} onChange={(e) => setF({ ...f, state: e.target.value })} options={STATES} />
+          <Select label="City / district" value={f.city} onChange={(e) => setF({ ...f, city: e.target.value })} options={DISTRICTS.includes(f.city) ? DISTRICTS : [f.city, ...DISTRICTS]} />
+          <Select label="State" value={f.state} onChange={(e) => setF({ ...f, state: e.target.value })} options={STATES.includes(f.state) ? STATES : [f.state, ...STATES]} />
         </div>
-        <Button
-          disabled={f.name.trim().length < 2}
-          onClick={() => {
-            update((x) => act.saveClient(x, me.id, f))
-            toast('Saved', 'green')
-          }}>
+        <Button loading={busy} disabled={f.name.trim().length < 2} onClick={save}>
           Save
         </Button>
       </Card>
       <div className="flex flex-wrap gap-2">
-        <Link to="/app/offers" className="h-10 px-4 inline-flex items-center rounded-[10px] border border-line-strong bg-white font-semibold text-[14px]">Offers</Link>
-        <Link to="/help" className="h-10 px-4 inline-flex items-center rounded-[10px] border border-line-strong bg-white font-semibold text-[14px]">Help</Link>
-        <Button variant="danger" onClick={() => update((x) => act.logout(x, 'client'))}>
+        <Link to="/app/offers" className="h-10 px-4 inline-flex items-center rounded-[10px] border border-line-strong bg-white font-semibold text-[14px]">
+          Offers
+        </Link>
+        <Link to="/app/invoices" className="h-10 px-4 inline-flex items-center rounded-[10px] border border-line-strong bg-white font-semibold text-[14px]">
+          My invoices
+        </Link>
+        <Link to="/help" className="h-10 px-4 inline-flex items-center rounded-[10px] border border-line-strong bg-white font-semibold text-[14px]">
+          Help
+        </Link>
+        <Button variant="danger" onClick={onLogout}>
           Log out
         </Button>
       </div>

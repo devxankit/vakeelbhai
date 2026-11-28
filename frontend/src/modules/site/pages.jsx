@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowRight, BadgeCheck, Car, Check, ChevronDown, FileText, Lock, MessageCircle, Receipt, Scale, ShieldCheck, Wallet } from 'lucide-react'
-import { Button, Field, Note, cx, useToast } from '@/components/ui'
+import { Button, Field, Note, cx } from '@/components/ui'
 import { CATEGORIES, categoryOf, DISTRICTS, FAQS, IMG, PHOTOS } from '@/lib/catalog'
-import { act, useStore } from '@/lib/store'
+import { publicApi } from '@/lib/api'
 import { inr, advocatePayout } from '@/lib/money'
 import { useTitle } from '@/lib/format'
 import { useT } from './lang'
@@ -109,8 +109,31 @@ function HowItWorks() {
   )
 }
 
-function Faq({ items = FAQS }) {
+/** Public data (content, meta), fetched once per page load and shared. */
+const cache = {}
+function usePublic(path) {
+  const [data, setData] = useState(cache[path] ?? null)
+  useEffect(() => {
+    if (cache[path]) return
+    let live = true
+    publicApi(path)
+      .then((j) => {
+        cache[path] = j.data
+        if (live) setData(j.data)
+      })
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [path])
+  return data
+}
+
+function Faq({ limit }) {
   const t = useT()
+  const content = usePublic('/content')
+  const all = content ? content.faqs.filter((f) => f.audience !== 'advocate') : FAQS
+  const items = limit ? all.slice(0, limit) : all
   const [open, setOpen] = useState(0)
   return (
     <div className="flex flex-col gap-3">
@@ -190,7 +213,7 @@ export function Home() {
       <AdvocateBand />
       <section className="wrap py-14 max-w-[860px] flex flex-col gap-5">
         <H2>{t('Common questions')}</H2>
-        <Faq items={FAQS.slice(0, 4)} />
+        <Faq limit={4} />
       </section>
     </>
   )
@@ -276,7 +299,7 @@ export function ChallanPage() {
         <form
           onSubmit={(e) => {
             e.preventDefault()
-            nav('/app/challan?vehicle=' + encodeURIComponent(num))
+            nav('/app/challan')
           }}
           className="flex flex-wrap gap-2.5">
           <Field label={t('Vehicle number')} className="flex-[1_1_240px]" value={num} onChange={(e) => setNum(e.target.value.toUpperCase())} placeholder="MP 09 AB 1234" />
@@ -284,7 +307,7 @@ export function ChallanPage() {
             {t('Check challans')}
           </Button>
         </form>
-        <Note tone="gold">{t('Live challan data comes from the e-Challan provider connected in the backend phase. The demo shows sample challans.')}</Note>
+        <Note tone="neutral">{t('Log in, add your vehicle and pay. Vakeel Bhai pays the traffic department for you and you get the receipt in the app.')}</Note>
       </div>
       <div className="rounded-[20px] overflow-hidden bg-ink relative">
         <img src={IMG.bannerTraffic} alt="" className="w-full aspect-[4/3] object-cover opacity-80" />
@@ -294,7 +317,7 @@ export function ChallanPage() {
           </span>
           <div>
             <p className="font-extrabold tracking-wider">MP 09 AB 1234</p>
-            <p className="text-[12px] text-orange font-semibold">{t('2 pending · ₹2,000')}</p>
+            <p className="text-[12px] text-orange font-semibold">{t('Pending challans')}</p>
           </div>
         </div>
       </div>
@@ -337,9 +360,10 @@ export function GstPage() {
 
 export function ForAdvocates() {
   const t = useT()
-  const { s } = useStore()
+  const meta = usePublic('/meta')
+  const rates = meta?.rates ?? { commission: 0.2, gst: 0.18 }
   useTitle('For advocates', 'Join Vakeel Bhai as a verified advocate. Receive client requests in your practice areas and district.')
-  const ex = advocatePayout(10000, { commission: s.settings.commission, gst: s.settings.gst })
+  const ex = advocatePayout(10000, rates)
   return (
     <>
       <section className="bg-ink text-white">
@@ -347,7 +371,7 @@ export function ForAdvocates() {
           <div className="flex-[1_1_440px] flex flex-col gap-5">
             <h1 className="font-serif font-bold text-[clamp(2rem,4.4vw,3rem)] leading-tight">{t('Grow your practice with verified client requests')}</h1>
             <p className="text-[16px] leading-relaxed text-on-ink max-w-xl">{t('Get verified once. Our team sends you requests that match your practice areas and district. Chat with clients, send quotes and get paid to your wallet.')}</p>
-            <Link to="/advocate" className="self-start h-12 px-6 inline-flex items-center gap-2 rounded-xl bg-gold text-ink font-bold">
+            <Link to="/login?role=advocate" className="self-start h-12 px-6 inline-flex items-center gap-2 rounded-xl bg-gold text-ink font-bold">
               {t('Register as an advocate')} <ArrowRight className="size-4" />
             </Link>
           </div>
@@ -386,22 +410,22 @@ export function ForAdvocates() {
             <span className="font-semibold">{inr(ex.base)}</span>
           </div>
           <div className="flex justify-between text-[14px]">
-            <span>{t('Platform commission')} ({Math.round(s.settings.commission * 100)}%)</span>
+            <span>{t('Platform commission')} ({Math.round(rates.commission * 100)}%)</span>
             <span className="font-semibold">−{inr(ex.commission)}</span>
           </div>
           <div className="flex justify-between text-[14px]">
-            <span>{t('GST on commission')} ({Math.round(s.settings.gst * 100)}%)</span>
+            <span>{t('GST on commission')} ({Math.round(rates.gst * 100)}%)</span>
             <span className="font-semibold">−{inr(ex.gstOnCommission)}</span>
           </div>
           <div className="flex justify-between text-[16px] font-extrabold border-t border-line pt-3">
             <span>{t('You receive')}</span>
             <span>{inr(ex.net)}</span>
           </div>
-          <p className="text-[13px] text-muted">{t('Membership plans (monthly, quarterly, yearly) are priced by Vakeel Bhai before launch.')}</p>
+          <p className="text-[13px] text-muted">{t('Membership plans')}</p>
           <div className="flex flex-wrap gap-2 mt-1">
-            {s.settings.plans.filter((p) => p.active).map((p) => (
+            {(meta?.plans ?? []).map((p) => (
               <span key={p.id} className="rounded-lg border border-line px-3 py-1.5 text-[13px] font-semibold">
-                {t(p.name)} · {p.price ? inr(p.price) : '[PRICE]'}
+                {p.name} · {p.price != null ? inr(p.price) + ' + GST' : t('price soon')}
               </span>
             ))}
           </div>
@@ -428,36 +452,26 @@ export function About() {
 
 export function Contact() {
   const t = useT()
-  const { update } = useStore()
-  const toast = useToast()
-  const [f, setF] = useState({ name: '', phone: '', email: '', message: '' })
+  const meta = usePublic('/meta')
   useTitle('Contact us')
-  const ok = f.name.trim() && /^[6-9]\d{9}$/.test(f.phone) && f.message.trim().length > 5
+  const wa = meta?.supportWhatsApp
   return (
     <section className="wrap py-14 grid gap-10 lg:grid-cols-[1fr_1.2fr]">
       <div className="flex flex-col gap-4">
         <h1 className="font-serif font-bold text-[clamp(2rem,4.4vw,2.8rem)]">{t('Contact us')}</h1>
-        <p className="text-[16px] leading-relaxed text-muted">{t('Questions about a request, payments or joining as an advocate? Write to us and our team will reply.')}</p>
-        <Note tone="gold" icon={MessageCircle}>
-          {t('The WhatsApp support number is added before launch.')}
-        </Note>
+        <p className="text-[16px] leading-relaxed text-muted">{t('Questions about a request, payments or joining as an advocate? Our team replies on the help desk, usually within a few hours.')}</p>
       </div>
-      <form
-        className="card p-6 flex flex-col gap-4"
-        onSubmit={(e) => {
-          e.preventDefault()
-          update((s) => act.addEnquiry(s, f))
-          setF({ name: '', phone: '', email: '', message: '' })
-          toast(t('Thank you. Our team will contact you.'), 'green')
-        }}>
-        <Field label={t('Your name')} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
-        <Field label={t('Mobile number')} prefix="+91" inputMode="tel" maxLength={10} value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value.replace(/\D/g, '') })} />
-        <Field label={t('Email (optional)')} type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
-        <Field label={t('Message')} as="textarea" value={f.message} onChange={(e) => setF({ ...f, message: e.target.value })} />
-        <Button type="submit" size="lg" disabled={!ok}>
-          {t('Send message')}
-        </Button>
-      </form>
+      <div className="card p-6 flex flex-col gap-4">
+        <Link to="/app/help/new" className="h-12 px-5 inline-flex items-center justify-center gap-2 rounded-xl bg-ink text-white font-bold">
+          <MessageCircle className="size-5" /> {t('Write to our help desk')}
+        </Link>
+        <p className="text-[13px] text-muted">{t('Log in with your mobile number to open a ticket. Advocates: use the help desk in your advocate account.')}</p>
+        {wa ? (
+          <a href={'https://wa.me/' + wa} target="_blank" rel="noreferrer" className="h-12 px-5 inline-flex items-center justify-center rounded-xl border border-line-strong font-bold">
+            {t('Chat on WhatsApp')}
+          </a>
+        ) : null}
+      </div>
     </section>
   )
 }
@@ -481,23 +495,20 @@ export function Help() {
   )
 }
 
-const LEGAL = {
-  terms: ['Terms of use', ['Vakeel Bhai is a technology platform that connects clients with independent, verified advocates. Vakeel Bhai is not a law firm and does not give legal advice.', 'Advocates set their own fees. Payments are made through Vakeel Bhai and held until the client confirms the work, or until the auto-confirm period passes without a dispute.', 'Vakeel Bhai keeps a platform commission from the advocate\'s fee, plus GST on it.', 'Draft text for the demo. The client provides the final terms before launch.']],
-  privacy: ['Privacy policy', ['We collect your mobile number, name, city and the details you share in requests and chats, so we can connect you with an advocate.', 'Advocate documents, including Aadhaar, are visible only to the Vakeel Bhai verification team.', 'Phone numbers are never shared between clients and advocates.', 'Draft text for the demo. The client provides the final policy before launch.']],
-  refund: ['Refund policy', ['If the agreed work is not done, raise a dispute before confirming. The payment stays on hold while our team reviews it.', 'If the dispute is upheld, the amount is refunded to your original payment method.', 'Membership fees are non-refundable once the membership is active.', 'Draft text for the demo. The client provides the final policy before launch.']],
-}
-
 export function Legal() {
   const t = useT()
   const { doc } = useParams()
-  const [title, paras] = LEGAL[doc] ?? LEGAL.terms
-  useTitle(title)
+  const content = usePublic('/content')
+  const d = content?.[['terms', 'privacy', 'refund'].includes(doc) ? doc : 'terms']
+  useTitle(d?.title ?? 'Legal')
+  if (!d) return <section className="wrap py-14 text-muted">…</section>
   return (
     <section className="wrap py-14 max-w-[820px] flex flex-col gap-4">
-      <h1 className="font-serif font-bold text-[clamp(2rem,4.4vw,2.6rem)]">{t(title)}</h1>
-      {paras.map((p) => (
+      <h1 className="font-serif font-bold text-[clamp(2rem,4.4vw,2.6rem)]">{d.title}</h1>
+      {d.draft ? <Note tone="gold">{t('Draft text. The final version is provided before launch.')}</Note> : null}
+      {d.body.map((p) => (
         <p key={p} className="text-[15.5px] leading-relaxed text-text-2">
-          {t(p)}
+          {p}
         </p>
       ))}
     </section>

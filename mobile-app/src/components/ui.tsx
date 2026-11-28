@@ -1,9 +1,11 @@
 import React from 'react';
 import {
   ActivityIndicator,
+  FlatList,
   Image,
   ImageSourcePropType,
   KeyboardTypeOptions,
+  Modal,
   Pressable,
   PressableProps,
   ScrollView,
@@ -16,7 +18,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
-import { ArrowLeft, Check, ChevronRight, LucideIcon } from 'lucide-react-native';
+import { ArrowLeft, Check, ChevronDown, ChevronRight, LucideIcon, Search, X } from 'lucide-react-native';
 import T from './T';
 import { colors, font, radius } from '../theme';
 import { tr, useLang } from '../i18n';
@@ -434,6 +436,112 @@ export function Field({
           {hint}
         </T>
       ) : null}
+    </View>
+  );
+}
+
+/**
+ * Dropdown: a field-like box that opens a bottom sheet with the options
+ * (and a search box when the list is long). Used for city, district, state.
+ */
+export function Select({
+  label,
+  value,
+  options,
+  onChange,
+  placeholder = 'Select',
+  raw = true,
+}: {
+  label?: string;
+  value: string;
+  options: readonly string[];
+  onChange: (v: string) => void;
+  placeholder?: string;
+  /** Options are names (cities, states) and are shown untranslated. */
+  raw?: boolean;
+}) {
+  useLang();
+  const insets = useSafeAreaInsets();
+  const [open, setOpen] = React.useState(false);
+  const [q, setQ] = React.useState('');
+  const searchable = options.length > 8;
+  const shown = q.trim() ? options.filter(o => o.toLowerCase().includes(q.trim().toLowerCase())) : options;
+  const close = () => {
+    setOpen(false);
+    setQ('');
+  };
+  return (
+    <View style={{ gap: 6 }}>
+      {label ? (
+        <T w="semibold" size={12.5} color={colors.text2}>
+          {label}
+        </T>
+      ) : null}
+      <Tap
+        onPress={() => setOpen(true)}
+        accessibilityRole="button"
+        accessibilityLabel={(label ? tr(label) + ': ' : '') + (value || tr(placeholder))}
+        style={{ height: 46, borderWidth: 1, borderColor: colors.lineStrong, borderRadius: radius.md, backgroundColor: colors.white, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 8 }}>
+        <T w="medium" size={15} color={value ? colors.text : colors.faint} style={{ flex: 1 }} numberOfLines={1} raw={!!value && raw}>
+          {value || placeholder}
+        </T>
+        <ChevronDown size={19} color={colors.muted} />
+      </Tap>
+      <Modal visible={open} transparent animationType="slide" onRequestClose={close} statusBarTranslucent>
+        <Pressable onPress={close} style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' }} accessibilityLabel={tr('Close')} />
+        <View style={{ backgroundColor: colors.white, borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '75%', paddingBottom: Math.max(insets.bottom, 12) }}>
+          <View style={{ alignItems: 'center', paddingTop: 8 }}>
+            <View style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: colors.lineStrong }} />
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 10, paddingBottom: 8 }}>
+            <T w="bold" size={16} style={{ flex: 1 }}>
+              {label ?? placeholder}
+            </T>
+            <IconBtn icon={X} label="Close" onPress={close} />
+          </View>
+          {searchable ? (
+            <View style={{ marginHorizontal: 16, marginBottom: 8, height: 42, borderRadius: 12, backgroundColor: colors.surface2, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12 }}>
+              <Search size={17} color={colors.muted} />
+              <TextInput
+                value={q}
+                onChangeText={setQ}
+                placeholder={tr('Search')}
+                placeholderTextColor={colors.faint}
+                accessibilityLabel={tr('Search')}
+                style={{ flex: 1, fontFamily: font.medium, fontSize: 14.5, color: colors.text, paddingVertical: 0 }}
+              />
+            </View>
+          ) : null}
+          <FlatList
+            data={shown as string[]}
+            keyExtractor={o => o}
+            keyboardShouldPersistTaps="handled"
+            ListEmptyComponent={
+              <T size={13.5} color={colors.muted} center style={{ paddingVertical: 20 }}>
+                No matches
+              </T>
+            }
+            renderItem={({ item: o }) => {
+              const on = o === value;
+              return (
+                <Tap
+                  onPress={() => {
+                    onChange(o);
+                    close();
+                  }}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: on }}
+                  style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, height: 50, borderTopWidth: 1, borderTopColor: colors.line, backgroundColor: on ? colors.goldWash : colors.white }}>
+                  <T w={on ? 'bold' : 'medium'} size={15} style={{ flex: 1 }} raw={raw}>
+                    {o}
+                  </T>
+                  {on ? <Check size={18} color={colors.ink} strokeWidth={2.6} /> : null}
+                </Tap>
+              );
+            }}
+          />
+        </View>
+      </Modal>
     </View>
   );
 }
